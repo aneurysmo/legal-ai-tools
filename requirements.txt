@@ -1,0 +1,10 @@
+numpy
+pandas
+pypdf
+python-docx
+langchain
+sentence-transformers
+python-dotenv
+openai
+google-generativeai
+anthropic
