@@ -11,6 +11,11 @@ venv/
 # Environment variables
 .env
 
+# Prisma / SQLite
+prisma/app.db
+prisma/app.db-journal
+prisma/migrations/
+
 # VS Code
 .vscode/
 

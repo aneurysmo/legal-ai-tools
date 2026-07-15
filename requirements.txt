@@ -1,3 +1,4 @@
+streamlit
 numpy
 pandas
 pypdf
@@ -8,3 +9,5 @@ python-dotenv
 openai
 google-generativeai
 anthropic
+prisma
+bcrypt
