@@ -16,6 +16,7 @@ Uso:
 """
 
 import html
+import io
 import tempfile
 from pathlib import Path
 
@@ -23,6 +24,7 @@ import streamlit as st
 
 import auth
 import config
+import document_drafting
 import knowledge_base
 from contract_risk_analyzer import (
     build_analysis_prompt,
@@ -379,6 +381,22 @@ button[data-baseweb="tab"][aria-selected="true"] {
   padding: 0.6rem 0.8rem !important;
   border-radius: 0 !important;
 }
+
+/* Vista previa del borrador de redaccion: se lee como un documento, no
+   como un textarea de formulario generico. */
+.draft-preview {
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 1.5rem 1.75rem;
+  max-height: 520px;
+  overflow-y: auto;
+  font-family: 'Source Serif 4', serif;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
 </style>
 """
 
@@ -552,7 +570,11 @@ st.sidebar.markdown("---")
 
 herramienta = st.sidebar.radio(
     "Elige una herramienta",
-    ["Análisis de riesgo contractual", "Biblioteca jurídica compartida"],
+    [
+        "Análisis de riesgo contractual",
+        "Biblioteca jurídica compartida",
+        "Redacción de documentos",
+    ],
 )
 
 st.sidebar.markdown("---")
@@ -985,12 +1007,167 @@ def render_floating_chat():
 
 
 # ---------------------------------------------------------------------------
+# Vista 3: Redaccion de documentos
+# ---------------------------------------------------------------------------
+
+def vista_redaccion():
+    st.header("✍️ Redacción de documentos")
+    st.write(
+        "Genera cartas, contratos y escritos legales completando un "
+        "formulario. Streamlit no puede mostrar archivos Word directamente, "
+        "así que el borrador se muestra aquí como texto y también puede "
+        "descargarse en .docx y .txt."
+    )
+
+    username = st.session_state["auth_user"]
+
+    tipo_key = st.selectbox(
+        "Tipo de documento",
+        options=list(document_drafting.TIPOS_DOCUMENTO.keys()),
+        format_func=lambda k: document_drafting.TIPOS_DOCUMENTO[k]["nombre"],
+    )
+    tipo_info = document_drafting.TIPOS_DOCUMENTO[tipo_key]
+
+    if st.session_state.get("redaccion_tipo_activo") != tipo_key:
+        st.session_state["redaccion_tipo_activo"] = tipo_key
+        st.session_state.pop("redaccion_borrador", None)
+
+    with st.form("redaccion_datos_form"):
+        valores = {}
+        for clave, etiqueta, tipo_campo, opcional in tipo_info["campos"]:
+            label = f"{etiqueta}" + (" (opcional)" if opcional else "")
+            if tipo_campo == "multiline":
+                valores[clave] = st.text_area(label, key=f"redaccion_{tipo_key}_{clave}")
+            elif tipo_campo == "money":
+                valores[clave] = st.text_input(
+                    label, key=f"redaccion_{tipo_key}_{clave}", placeholder="ej. 50000"
+                )
+            elif tipo_campo == "date":
+                valores[clave] = st.date_input(
+                    label, key=f"redaccion_{tipo_key}_{clave}", value=None, format="DD/MM/YYYY"
+                )
+            else:
+                valores[clave] = st.text_input(label, key=f"redaccion_{tipo_key}_{clave}")
+        generar = st.form_submit_button("Generar borrador", type="primary")
+
+    if generar:
+        errores = []
+        datos = {}
+        for clave, etiqueta, tipo_campo, opcional in tipo_info["campos"]:
+            valor = valores[clave]
+
+            if tipo_campo == "date":
+                if valor is None:
+                    if not opcional:
+                        errores.append(f"«{etiqueta}» es obligatorio.")
+                    datos[clave] = ""
+                else:
+                    datos[clave] = valor.strftime("%d/%m/%Y")
+                continue
+
+            valor = (valor or "").strip()
+            if not valor:
+                if not opcional:
+                    errores.append(f"«{etiqueta}» es obligatorio.")
+                datos[clave] = ""
+                continue
+
+            if tipo_campo == "money":
+                try:
+                    datos[clave] = document_drafting.validar_monto(valor)
+                except ValueError as exc:
+                    errores.append(f"«{etiqueta}»: {exc}")
+            elif tipo_campo == "email":
+                try:
+                    datos[clave] = document_drafting.validar_email(valor)
+                except ValueError as exc:
+                    errores.append(f"«{etiqueta}»: {exc}")
+            else:
+                datos[clave] = valor
+
+        if errores:
+            for error in errores:
+                st.error(error)
+        else:
+            datos_formateados = document_drafting.formatear_datos_para_prompt(tipo_info, datos)
+            prompt = document_drafting.construir_prompt(
+                tipo_info["nombre"], tipo_info["enfoque"], datos_formateados
+            )
+            with st.spinner("Generando borrador con la IA..."):
+                borrador = document_drafting.generar_borrador(prompt, provider_config)
+
+            if borrador is None:
+                st.error(
+                    "No se pudo generar el documento. Verifica la configuración "
+                    "del proveedor de LLM en .env."
+                )
+            else:
+                st.session_state["redaccion_borrador"] = borrador
+                st.session_state["redaccion_partes"] = document_drafting.extraer_partes(tipo_info, datos)
+
+    borrador = st.session_state.get("redaccion_borrador")
+    if not borrador:
+        return
+
+    st.subheader("Borrador")
+    st.markdown(
+        f'<div class="draft-preview">{html.escape(borrador)}</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.form("redaccion_cambios_form", border=False):
+        instrucciones = st.text_area(
+            "¿Quieres hacer cambios? Describe qué ajustar (deja vacío si no)."
+        )
+        aplicar_cambios = st.form_submit_button("Aplicar cambios")
+
+    if aplicar_cambios and instrucciones.strip():
+        prompt_cambios = document_drafting.construir_prompt_cambios(borrador, instrucciones.strip())
+        with st.spinner("Regenerando documento con los cambios solicitados..."):
+            nuevo_borrador = document_drafting.generar_borrador(prompt_cambios, provider_config)
+        if nuevo_borrador is None:
+            st.error("No se pudieron aplicar los cambios. Intenta de nuevo.")
+        else:
+            st.session_state["redaccion_borrador"] = nuevo_borrador
+            st.rerun()
+
+    nombre_base = document_drafting.generar_nombre_archivo(tipo_info["nombre"])
+
+    docx_buffer = io.BytesIO()
+    document_drafting.exportar_docx(docx_buffer, tipo_info["nombre"], borrador)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        descargado_docx = st.download_button(
+            "⬇️ Descargar .docx",
+            data=docx_buffer.getvalue(),
+            file_name=f"{nombre_base}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            type="primary",
+        )
+    with col2:
+        descargado_txt = st.download_button(
+            "⬇️ Descargar .txt",
+            data=borrador.encode("utf-8"),
+            file_name=f"{nombre_base}.txt",
+            mime="text/plain",
+        )
+
+    if descargado_docx or descargado_txt:
+        partes = st.session_state.get("redaccion_partes", [])
+        document_drafting.guardar_historial(tipo_info["nombre"], partes, nombre_base)
+        knowledge_base.log_activity(username, "redaccion", tipo_info["nombre"])
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
 if herramienta == "Análisis de riesgo contractual":
     vista_riesgo_contractual()
-else:
+elif herramienta == "Biblioteca jurídica compartida":
     vista_investigacion()
+else:
+    vista_redaccion()
 
 render_floating_chat()

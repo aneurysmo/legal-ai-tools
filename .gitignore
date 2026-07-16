@@ -16,6 +16,10 @@ prisma/app.db
 prisma/app.db-journal
 prisma/migrations/
 
+# Documentos generados por document_drafting.py
+documentos_generados/
+historial.json
+
 # VS Code
 .vscode/
 
