@@ -44,6 +44,42 @@ SYSTEM_PROMPT = (
     "encontraste la informacion."
 )
 
+LIBRARY_CHAT_SYSTEM_PROMPT = (
+    "Eres un asistente de investigacion juridica. Si la pregunta no es sobre "
+    "temas legales, indica explicitamente que no puedes ayudar con eso y no "
+    "respondas la pregunta. Si en el contexto se incluyen fragmentos de "
+    "documentos de la biblioteca, basa tu respuesta en ellos y cita el "
+    "nombre del documento del que proviene cada dato. Si no se incluyen "
+    "fragmentos (porque no hay ninguno suficientemente relevante en la "
+    "biblioteca), responde con tu conocimiento juridico general y aclara "
+    "que la respuesta no esta basada en un documento especifico de la "
+    "biblioteca."
+)
+
+DOCUMENT_TYPE_PROMPT = (
+    "Clasifica el siguiente documento legal en una categoria breve "
+    "(ej. Contrato, Sentencia, Memorando, Ley/Reglamento, Demanda, Otro). "
+    "Responde unicamente con la categoria, sin explicacion adicional.\n\n"
+    "Documento:\n{texto}"
+)
+
+DOCUMENT_SUMMARY_PROMPT = (
+    "Resume el siguiente documento legal en un parrafo breve, y luego lista "
+    "los puntos mas importantes en formato de lista con guiones. Responde "
+    "en espanol.\n\nDocumento:\n{texto}"
+)
+
+# Umbral minimo de similitud coseno para incluir los fragmentos recuperados
+# como contexto citable ("anclado" en la biblioteca). Por debajo de esto, el
+# chat responde con conocimiento juridico general del LLM en vez de forzar
+# una cita a un documento poco relevante. Calibrado empiricamente con
+# all-MiniLM-L6-v2 sobre texto legal en espanol: preguntas genuinamente
+# ancladas en un documento subido puntuan ~0.6+; preguntas juridicas
+# genericas no cubiertas por ningun documento puntuan ~0.35-0.45 (el mismo
+# vocabulario legal produce similitud "de fondo" alta); preguntas
+# totalmente ajenas al derecho puntuan ~0.2 o menos.
+MIN_RELEVANCE_SCORE = 0.55
+
 
 def get_active_provider_config():
     """Valida y devuelve la configuracion del proveedor de LLM activo."""

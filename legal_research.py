@@ -70,51 +70,51 @@ def build_prompt(question: str, retrieved: list[tuple[int, str, float]]) -> str:
     )
 
 
-def ask_claude(prompt: str, model: str) -> str:
+def ask_claude(prompt: str, model: str, system_prompt: str = config.SYSTEM_PROMPT) -> str:
     import anthropic
 
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     response = client.messages.create(
         model=model,
         max_tokens=2048,
-        system=config.SYSTEM_PROMPT,
+        system=system_prompt,
         messages=[{"role": "user", "content": prompt}],
     )
     return "".join(block.text for block in response.content if block.type == "text")
 
 
-def ask_openai(prompt: str, model: str) -> str:
+def ask_openai(prompt: str, model: str, system_prompt: str = config.SYSTEM_PROMPT) -> str:
     from openai import OpenAI
 
     client = OpenAI(api_key=config.OPENAI_API_KEY)
     response = client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": config.SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ],
     )
     return response.choices[0].message.content
 
 
-def ask_gemini(prompt: str, model: str) -> str:
+def ask_gemini(prompt: str, model: str, system_prompt: str = config.SYSTEM_PROMPT) -> str:
     import google.generativeai as genai
 
     genai.configure(api_key=config.GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel(model, system_instruction=config.SYSTEM_PROMPT)
+    gemini_model = genai.GenerativeModel(model, system_instruction=system_prompt)
     response = gemini_model.generate_content(prompt)
     return response.text
 
 
-def ask_llm(prompt: str, provider_config: dict) -> str:
+def ask_llm(prompt: str, provider_config: dict, system_prompt: str = config.SYSTEM_PROMPT) -> str:
     provider = provider_config["provider"]
     model = provider_config["model"]
     if provider == "claude":
-        return ask_claude(prompt, model)
+        return ask_claude(prompt, model, system_prompt)
     if provider == "openai":
-        return ask_openai(prompt, model)
+        return ask_openai(prompt, model, system_prompt)
     if provider == "gemini":
-        return ask_gemini(prompt, model)
+        return ask_gemini(prompt, model, system_prompt)
     raise ValueError(f"Proveedor no soportado: {provider}")
 
 

@@ -23,6 +23,7 @@ import streamlit as st
 
 import auth
 import config
+import knowledge_base
 from contract_risk_analyzer import (
     build_analysis_prompt,
     build_report,
@@ -39,7 +40,6 @@ from legal_research import (
     chunk_text as chunk_text_research,
     embed_chunks,
     extract_text_from_pdf,
-    retrieve_top_chunks,
 )
 
 st.set_page_config(page_title="Legal AI Tools", page_icon="⚖️", layout="wide")
@@ -255,6 +255,130 @@ button[data-baseweb="tab"][aria-selected="true"] {
   color: var(--ink-soft);
   font-size: 0.88rem;
 }
+
+/* Chat de la biblioteca: burbujas silenciosas, sin colores de fantasia */
+[data-testid="stChatMessage"] {
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+
+/* Insignia sobre la respuesta del asistente: aclara si esta anclada en un
+   documento real de la biblioteca o si es conocimiento juridico general,
+   sin tener que leer el texto completo para saberlo. */
+.grounding-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  margin-bottom: 0.5rem;
+  background: var(--paper-inset);
+  border: 1px solid var(--rule);
+  color: var(--ink-faint);
+}
+.grounding-badge.grounded {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Chat flotante: disponible en cualquier vista, esquina inferior derecha.
+   Sombra marcada a proposito (unica excepcion a "elevacion sutil" del resto
+   del sistema): es contenido superpuesto sobre la pagina, no una tarjeta
+   mas del flujo, y necesita leerse claramente por encima de todo. */
+.st-key-floating_chat_toggle {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: fit-content;
+  z-index: 999990;
+}
+.st-key-floating_chat_toggle button {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--accent) !important;
+  color: #fff !important;
+  font-size: 1.4rem;
+  box-shadow: 0 6px 20px rgba(33,29,26,0.25);
+  border: none !important;
+}
+
+.st-key-floating_chat_panel {
+  position: fixed;
+  bottom: 96px;
+  right: 24px;
+  z-index: 999990;
+  width: 380px;
+  max-width: calc(100vw - 48px);
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(33,29,26,0.22), 0 0 0 1px rgba(33,29,26,0.04);
+  overflow: hidden;
+}
+
+.floating-chat-header {
+  background: var(--accent);
+  color: #fff;
+  font-family: 'Source Serif 4', serif;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.7rem 1rem;
+}
+
+.floating-chat-messages {
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ink-faint) transparent;
+}
+.floating-chat-messages::-webkit-scrollbar { width: 8px; }
+.floating-chat-messages::-webkit-scrollbar-thumb {
+  background: var(--ink-faint);
+  border-radius: 8px;
+}
+
+.chat-bubble {
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  max-width: 88%;
+}
+.chat-bubble-user {
+  align-self: flex-end;
+  background: var(--paper-inset);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+}
+.chat-bubble-assistant {
+  align-self: flex-start;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+}
+.chat-bubble-empty {
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 1rem 0;
+}
+
+.st-key-floating_chat_panel [data-testid="stForm"] {
+  border: none !important;
+  border-top: 1px solid var(--rule) !important;
+  padding: 0.6rem 0.8rem !important;
+  border-radius: 0 !important;
+}
 </style>
 """
 
@@ -428,7 +552,7 @@ st.sidebar.markdown("---")
 
 herramienta = st.sidebar.radio(
     "Elige una herramienta",
-    ["Análisis de riesgo contractual", "Investigación jurídica (Q&A sobre PDF)"],
+    ["Análisis de riesgo contractual", "Biblioteca jurídica compartida"],
 )
 
 st.sidebar.markdown("---")
@@ -504,6 +628,9 @@ def vista_riesgo_contractual():
             st.session_state["riesgo_hallazgos"] = hallazgos
             st.session_state["riesgo_reporte_md"] = reporte_md
             st.session_state["riesgo_documento"] = uploaded_file.name
+            knowledge_base.log_activity(
+                st.session_state["auth_user"], "riesgo_contractual", uploaded_file.name
+            )
 
             if fallos:
                 st.warning(
@@ -585,93 +712,276 @@ def vista_riesgo_contractual():
 # Vista 2: Investigacion juridica (Q&A)
 # ---------------------------------------------------------------------------
 
+def _sample_document_text(chunks: list[str], max_words: int = 4000) -> str:
+    words: list[str] = []
+    for chunk in chunks:
+        words.extend(chunk.split())
+        if len(words) >= max_words:
+            break
+    return " ".join(words[:max_words])
+
+
+def _analyze_document(document_id: int) -> None:
+    """Clasifica el tipo de documento y genera un resumen, una sola vez, y
+    lo persiste. Reusa el ask_llm/provider ya configurado en config.py."""
+    doc = knowledge_base.get_document(document_id)
+    texto = _sample_document_text(doc["chunks"])
+
+    tipo = ask_llm(config.DOCUMENT_TYPE_PROMPT.format(texto=texto), provider_config).strip()
+    resumen = ask_llm(config.DOCUMENT_SUMMARY_PROMPT.format(texto=texto), provider_config).strip()
+
+    knowledge_base.set_document_analysis(document_id, tipo, resumen)
+
+
+def _answer_document_question(document_id: int, pregunta: str) -> str:
+    """Q&A acotado a UN documento de la biblioteca, citando el numero de
+    fragmento — el mismo comportamiento que legal_research.py original."""
+    model = load_embedding_model(config.EMBEDDING_MODEL)
+    query_embedding = model.encode([pregunta], convert_to_numpy=True, normalize_embeddings=True)[0]
+    retrieved = knowledge_base.retrieve_top_chunks_for_document(document_id, query_embedding)
+    if not retrieved:
+        return "Este documento no tiene fragmentos indexados todavia."
+
+    prompt = build_prompt(pregunta, retrieved)
+    try:
+        return ask_llm(prompt, provider_config)
+    except Exception as exc:
+        return f"Ocurrió un error al consultar el LLM: {exc}"
+
+
+def _build_library_prompt(pregunta: str, retrieved: list[tuple[str, str, float]]) -> str:
+    if not retrieved:
+        return (
+            "No se encontro ningun fragmento relevante en la biblioteca "
+            f"compartida.\n\nPregunta: {pregunta}\n\n"
+            "Responde en espanol con tu conocimiento juridico general, "
+            "aclarando que no se baso en un documento especifico de la "
+            "biblioteca."
+        )
+
+    context_blocks = "\n\n".join(
+        f'[Documento "{filename}"]\n{chunk}' for filename, chunk, _ in retrieved
+    )
+    return (
+        f"Contexto extraido de la biblioteca compartida:\n\n{context_blocks}\n\n"
+        f"Pregunta: {pregunta}\n\n"
+        "Responde en espanol, citando el nombre del documento del que "
+        "proviene cada dato relevante."
+    )
+
+
 def vista_investigacion():
-    st.header("🔎 Investigación jurídica (Q&A sobre PDF)")
+    st.header("📚 Biblioteca jurídica compartida")
     st.write(
-        "Sube un PDF, genera sus embeddings y luego haz preguntas sobre su "
-        "contenido en un formato de chat."
+        "Sube documentos para sumarlos a la biblioteca compartida entre "
+        "todos los usuarios. Para preguntar sobre su contenido o sobre "
+        "temas jurídicos en general, usa el chat en la esquina inferior "
+        "derecha — está disponible en cualquier sección de la app."
     )
 
-    uploaded_file = st.file_uploader("PDF a consultar", type=["pdf"], key="research_pdf")
-
+    uploaded_file = st.file_uploader("Agregar documento a la biblioteca", type=["pdf"], key="research_pdf")
     procesar = st.button(
-        "Procesar documento", type="primary", disabled=uploaded_file is None
+        "Agregar a la biblioteca", type="primary", disabled=uploaded_file is None
     )
+
+    username = st.session_state["auth_user"]
 
     if procesar and uploaded_file is not None:
-        tmp_path = save_uploaded_file(uploaded_file)
-        try:
-            with st.spinner("Extrayendo texto del PDF..."):
-                text = extract_text_from_pdf(str(tmp_path))
+        existing_id = knowledge_base.find_existing_document(uploaded_file.name, uploaded_file.size)
+        if existing_id is not None:
+            st.info(f"«{uploaded_file.name}» ya está en la biblioteca compartida.")
+        else:
+            tmp_path = save_uploaded_file(uploaded_file)
+            try:
+                with st.spinner("Extrayendo texto del documento..."):
+                    text = extract_text_from_pdf(str(tmp_path))
 
-            if not text.strip():
-                st.warning(
-                    "No se pudo extraer texto del PDF. ¿Está escaneado sin OCR?"
-                )
-                return
-
-            chunks = chunk_text_research(text)
-
-            with st.spinner("Generando embeddings..."):
-                try:
-                    model = load_embedding_model(config.EMBEDDING_MODEL)
-                    embeddings = embed_chunks(model, chunks)
-                except Exception as exc:
-                    st.error(f"No se pudieron generar los embeddings: {exc}")
+                if not text.strip():
+                    st.warning(
+                        "No se pudo extraer texto del PDF. ¿Está escaneado sin OCR?"
+                    )
                     return
 
-            st.session_state["research_chunks"] = chunks
-            st.session_state["research_embeddings"] = embeddings
-            st.session_state["research_doc_name"] = uploaded_file.name
-            st.session_state["research_messages"] = []
-            st.success(
-                f"Documento procesado: {len(chunks)} fragmento(s) listos para consultar."
-            )
-        finally:
-            tmp_path.unlink(missing_ok=True)
+                chunks = chunk_text_research(text)
 
-    if "research_chunks" not in st.session_state:
-        st.info("Sube y procesa un PDF para comenzar a hacer preguntas.")
-        return
+                with st.spinner("Generando embeddings..."):
+                    try:
+                        model = load_embedding_model(config.EMBEDDING_MODEL)
+                        embeddings = embed_chunks(model, chunks)
+                    except Exception as exc:
+                        st.error(f"No se pudieron generar los embeddings: {exc}")
+                        return
 
-    st.caption(f"Documento activo: **{st.session_state.get('research_doc_name', '—')}**")
+                knowledge_base.add_document(
+                    uploaded_file.name, uploaded_file.size, username, chunks, embeddings
+                )
+                st.success(
+                    f"«{uploaded_file.name}» agregado a la biblioteca: "
+                    f"{len(chunks)} fragmento(s)."
+                )
+            finally:
+                tmp_path.unlink(missing_ok=True)
+
+        knowledge_base.log_activity(username, "investigacion", uploaded_file.name)
+
+    documentos = knowledge_base.list_documents()
+    with st.expander(
+        f"📖 Documentos en la biblioteca ({len(documentos)})",
+        expanded=len(documentos) > 0,
+    ):
+        if not documentos:
+            st.caption("Aún no hay documentos en la biblioteca compartida.")
+        else:
+            for doc in documentos:
+                st.markdown(
+                    f"""
+                    <div class="finding-card" style="--finding-color:var(--ink-faint)">
+                      <div class="finding-head">
+                        <span class="finding-tag">{html.escape(doc['filename'])}</span>
+                        <span class="finding-level">{doc['chunk_count']} fragmentos</span>
+                      </div>
+                      <div class="finding-reco">
+                        Subido por <strong>{html.escape(doc['uploaded_by'])}</strong>
+                        el {doc['uploaded_at'].strftime('%Y-%m-%d %H:%M')}
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+                if doc["document_type"] is None:
+                    if st.button("🔍 Analizar", key=f"analyze_{doc['id']}"):
+                        with st.spinner("Analizando documento..."):
+                            _analyze_document(doc["id"])
+                        st.rerun()
+                else:
+                    st.markdown(
+                        f"""
+                        <div class="finding-card" style="--finding-color:var(--accent)">
+                          <div class="finding-head">
+                            <span class="finding-level">{html.escape(doc['document_type'])}</span>
+                          </div>
+                          <div class="finding-reco">{html.escape(doc['summary']).replace(chr(10), '<br>')}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+                    with st.form(f"doc_qa_form_{doc['id']}", border=False):
+                        doc_pregunta = st.text_input(
+                            "Pregunta sobre este documento",
+                            key=f"doc_qa_input_{doc['id']}",
+                            placeholder=f"Pregunta sobre «{doc['filename']}»...",
+                            label_visibility="collapsed",
+                        )
+                        doc_preguntar = st.form_submit_button("Preguntar")
+
+                    if doc_preguntar and doc_pregunta.strip():
+                        with st.spinner("Consultando al LLM..."):
+                            respuesta_doc = _answer_document_question(doc["id"], doc_pregunta.strip())
+                        st.session_state[f"doc_qa_answer_{doc['id']}"] = respuesta_doc
+
+                    if f"doc_qa_answer_{doc['id']}" in st.session_state:
+                        st.markdown(st.session_state[f"doc_qa_answer_{doc['id']}"])
+
+                st.markdown("<div style='height:0.6rem'></div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Chat flotante: disponible en cualquier vista de la app (no en el login,
+# que ya termina en st.stop() antes de llegar aqui).
+# ---------------------------------------------------------------------------
+
+def _answer_library_question(username: str, pregunta: str) -> tuple[str, str]:
+    """Devuelve (badge_html, respuesta). Ejecuta embed -> retrieve -> gate ->
+    prompt -> LLM, igual que antes, pero como una funcion pura reutilizable
+    desde el widget flotante."""
+    if provider_error:
+        return "", f"No se puede consultar el LLM: {provider_error}"
+
+    try:
+        model = load_embedding_model(config.EMBEDDING_MODEL)
+        query_embedding = model.encode(
+            [pregunta], convert_to_numpy=True, normalize_embeddings=True
+        )[0]
+        retrieved = knowledge_base.retrieve_top_chunks_global(query_embedding)
+        best_score = retrieved[0][2] if retrieved else -1.0
+
+        grounded = best_score >= config.MIN_RELEVANCE_SCORE
+        if grounded:
+            prompt = _build_library_prompt(pregunta, retrieved)
+            fuentes = ", ".join(sorted({fn for fn, _, _ in retrieved}))
+            badge = f'<span class="grounding-badge grounded">📎 {html.escape(fuentes)}</span>'
+        else:
+            prompt = _build_library_prompt(pregunta, [])
+            badge = '<span class="grounding-badge">📖 Conocimiento general</span>'
+
+        respuesta = ask_llm(prompt, provider_config, config.LIBRARY_CHAT_SYSTEM_PROMPT)
+        return badge, respuesta
+    except Exception as exc:
+        return "", f"Ocurrió un error al consultar el LLM: {exc}"
+
+
+def render_floating_chat():
+    username = st.session_state["auth_user"]
 
     if "research_messages" not in st.session_state:
-        st.session_state["research_messages"] = []
+        st.session_state["research_messages"] = knowledge_base.get_chat_history(username)
+    if "chat_widget_open" not in st.session_state:
+        st.session_state["chat_widget_open"] = False
 
-    for msg in st.session_state["research_messages"]:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    with st.container(key="floating_chat_toggle"):
+        icon = "✕" if st.session_state["chat_widget_open"] else "💬"
+        if st.button(icon, key="chat_toggle_btn"):
+            st.session_state["chat_widget_open"] = not st.session_state["chat_widget_open"]
+            st.rerun()
 
-    pregunta = st.chat_input("Escribe tu pregunta sobre el documento...")
+    if not st.session_state["chat_widget_open"]:
+        return
 
-    if pregunta:
-        st.session_state["research_messages"].append({"role": "user", "content": pregunta})
-        with st.chat_message("user"):
-            st.markdown(pregunta)
+    with st.container(key="floating_chat_panel"):
+        st.markdown(
+            '<div class="floating-chat-header">📚 Biblioteca jurídica</div>',
+            unsafe_allow_html=True,
+        )
 
-        with st.chat_message("assistant"):
-            if provider_error:
-                respuesta = f"No se puede consultar el LLM: {provider_error}"
-                st.error(respuesta)
-            else:
-                try:
-                    model = load_embedding_model(config.EMBEDDING_MODEL)
-                    retrieved = retrieve_top_chunks(
-                        model,
-                        pregunta,
-                        st.session_state["research_chunks"],
-                        st.session_state["research_embeddings"],
-                    )
-                    prompt = build_prompt(pregunta, retrieved)
-                    with st.spinner("Consultando al LLM..."):
-                        respuesta = ask_llm(prompt, provider_config)
-                    st.markdown(respuesta)
-                except Exception as exc:
-                    respuesta = f"Ocurrió un error al consultar el LLM: {exc}"
-                    st.error(respuesta)
+        messages = st.session_state["research_messages"]
+        if not messages:
+            bubbles_html = '<div class="chat-bubble-empty">Pregunta algo sobre la biblioteca o sobre derecho en general.</div>'
+        else:
+            bubbles_html = "".join(
+                f'<div class="chat-bubble chat-bubble-{msg["role"]}">{msg["content_html"]}</div>'
+                if "content_html" in msg
+                else f'<div class="chat-bubble chat-bubble-{msg["role"]}">{html.escape(msg["content"])}</div>'
+                for msg in messages
+            )
+        st.markdown(
+            f'<div class="floating-chat-messages" id="floating-chat-scroll">{bubbles_html}</div>',
+            unsafe_allow_html=True,
+        )
 
-        st.session_state["research_messages"].append({"role": "assistant", "content": respuesta})
+        with st.form("floating_chat_form", clear_on_submit=True, border=False):
+            pregunta = st.text_input(
+                "Pregunta", placeholder="Escribe tu pregunta jurídica...", label_visibility="collapsed"
+            )
+            enviado = st.form_submit_button("Enviar", type="primary")
+
+    if enviado and pregunta.strip():
+        pregunta = pregunta.strip()
+        st.session_state["research_messages"].append(
+            {"role": "user", "content": pregunta, "content_html": html.escape(pregunta)}
+        )
+        knowledge_base.log_chat_message(username, "user", pregunta)
+
+        with st.spinner("Consultando al LLM..."):
+            badge, respuesta = _answer_library_question(username, pregunta)
+
+        content_html = (badge + "<br>" if badge else "") + html.escape(respuesta).replace("\n", "<br>")
+        st.session_state["research_messages"].append(
+            {"role": "assistant", "content": respuesta, "content_html": content_html}
+        )
+        knowledge_base.log_chat_message(username, "assistant", respuesta)
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -682,3 +992,5 @@ if herramienta == "Análisis de riesgo contractual":
     vista_riesgo_contractual()
 else:
     vista_investigacion()
+
+render_floating_chat()

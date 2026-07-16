@@ -16,4 +16,54 @@ model User {
   securityQuestion    String
   securityAnswerHash  String
   createdAt           DateTime @default(now())
+
+  documents    Document[]
+  messages     ChatMessage[]
+  activityLogs ActivityLog[]
+}
+
+model Document {
+  id           Int      @id @default(autoincrement())
+  filename     String
+  sizeBytes    Int
+  uploadedBy   User     @relation(fields: [uploadedById], references: [id])
+  uploadedById Int
+  uploadedAt   DateTime @default(now())
+  documentType String?
+  summary      String?
+
+  chunks Chunk[]
+
+  @@unique([filename, sizeBytes])
+}
+
+model Chunk {
+  id         Int      @id @default(autoincrement())
+  document   Document @relation(fields: [documentId], references: [id])
+  documentId Int
+  ordinal    Int
+  text       String
+  embedding  String
+
+  @@index([documentId])
+}
+
+model ChatMessage {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int
+  role      String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model ActivityLog {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int
+  tool      String
+  filename  String
+  createdAt DateTime @default(now())
 }
