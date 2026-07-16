@@ -15,6 +15,7 @@ Uso:
     streamlit run app.py
 """
 
+import html
 import tempfile
 from pathlib import Path
 
@@ -45,6 +46,222 @@ st.set_page_config(page_title="Legal AI Tools", page_icon="⚖️", layout="wide
 
 
 # ---------------------------------------------------------------------------
+# Tema visual — "expediente legal": papel, tinta, sellos de lacre.
+# Se inyecta una sola vez via CSS; los tokens de color viven aqui para que
+# el resto de la app (tabla de hallazgos, tarjetas, alertas) los reutilice.
+# ---------------------------------------------------------------------------
+
+RISK_COLOR = {"alto": "#8a3324", "medio": "#a6741c", "bajo": "#3f6b4c"}
+
+THEME_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@500;600;700&family=Inter:wght@400;500;600&display=swap');
+
+:root {
+  --ink: #211d1a;
+  --ink-soft: #5b5449;
+  --ink-faint: #8c8477;
+  --paper: #faf8f3;
+  --paper-deep: #f1ece1;
+  --paper-inset: #ece5d6;
+  --rule: rgba(33,29,26,0.12);
+  --rule-soft: rgba(33,29,26,0.07);
+  --accent: #8a3324;
+  --accent-soft: rgba(138,51,36,0.08);
+}
+
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+h1, h2, h3, [data-testid="stMetricValue"] {
+  font-family: 'Source Serif 4', serif !important;
+  letter-spacing: -0.01em;
+}
+h1 { font-weight: 600; }
+
+[data-testid="stAppViewContainer"] { background: var(--paper); }
+
+[data-testid="stSidebar"] {
+  background: var(--paper-deep);
+  border-right: 1px solid var(--rule);
+}
+[data-testid="stSidebar"] h1 {
+  font-size: 1.35rem;
+  margin-bottom: 0.1rem;
+}
+[data-testid="stSidebar"] hr { border-color: var(--rule-soft); margin: 0.9rem 0; }
+
+/* Radio nav en el sidebar: lista tipo carpeta, no burbujas genericas */
+[data-testid="stSidebar"] [role="radiogroup"] {
+  gap: 0.15rem;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label {
+  padding: 0.5rem 0.6rem;
+  border-radius: 6px;
+  transition: background-color 120ms ease-out;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+  background: var(--paper-inset);
+}
+
+/* Inputs: relleno ligeramente mas oscuro que el entorno (inset) */
+[data-testid="stTextInput"] input,
+[data-testid="stChatInput"] textarea {
+  background: var(--paper-inset) !important;
+  border: 1px solid var(--rule) !important;
+  color: var(--ink) !important;
+}
+[data-testid="stTextInput"] input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px var(--accent) !important;
+}
+
+/* Botones primarios: sello de lacre, no azul SaaS */
+button[kind="primary"], button[kind="primaryFormSubmit"] {
+  background: var(--accent) !important;
+  border: none !important;
+  font-weight: 500;
+  transition: transform 100ms ease-out;
+}
+button[kind="primary"]:active, button[kind="primaryFormSubmit"]:active { transform: scale(0.97); }
+
+/* Alertas: barra de acento a la izquierda en vez de relleno solido */
+[data-testid="stAlertContainer"] {
+  background: var(--paper) !important;
+  border: 1px solid var(--rule) !important;
+  border-left-width: 3px !important;
+  border-radius: 6px;
+}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {
+  border-left-color: #3f6b4c !important;
+}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {
+  border-left-color: var(--accent) !important;
+}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {
+  border-left-color: #a6741c !important;
+}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentInfo"]) {
+  border-left-color: var(--ink-faint) !important;
+}
+[data-testid="stAlertContainer"] p, [data-testid="stAlertContainer"] strong {
+  color: var(--ink) !important;
+}
+
+/* El formulario nativo no debe dibujar su propia caja dentro de la
+   tarjeta de expediente: una sola superficie, no cajas anidadas. */
+[data-testid="stForm"] {
+  border: none !important;
+  padding: 0 !important;
+}
+
+/* Texto de labels y pestañas: tinta del tema, no el azul-gris de Streamlit */
+[data-testid="stWidgetLabel"] p,
+[data-testid="stMarkdownContainer"] p {
+  color: var(--ink) !important;
+}
+button[data-baseweb="tab"] {
+  color: var(--ink-faint) !important;
+  font-weight: 500;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+  color: var(--accent) !important;
+}
+[data-baseweb="tab-highlight"] { background-color: var(--accent) !important; }
+
+/* Tarjeta de login/registro */
+.expediente-card {
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 2rem 2.25rem 1.5rem;
+  box-shadow: 0 1px 2px rgba(33,29,26,0.05), 0 4px 16px rgba(33,29,26,0.04);
+}
+.expediente-title {
+  font-family: 'Source Serif 4', serif;
+  font-weight: 600;
+  font-size: 1.6rem;
+  color: var(--ink);
+  margin-bottom: 0.15rem;
+}
+.expediente-subtitle {
+  color: var(--ink-faint);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 1.1rem;
+  margin-bottom: 1.1rem;
+}
+
+/* Metricas de riesgo */
+.risk-metric {
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--risk-color, var(--accent));
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+}
+.risk-metric .risk-metric-label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.risk-metric .risk-metric-value {
+  font-family: 'Source Serif 4', serif;
+  font-size: 1.9rem;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ficha de hallazgo — anotacion al margen, no fila de tabla semaforo */
+.finding-card {
+  background: var(--paper-deep);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--finding-color, var(--accent));
+  border-radius: 6px;
+  padding: 0.85rem 1.1rem;
+  margin-bottom: 0.6rem;
+}
+.finding-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+.finding-tag {
+  font-family: 'Source Serif 4', serif;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+.finding-level {
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--finding-color, var(--accent));
+}
+.finding-quote {
+  font-style: italic;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+  border-left: 2px solid var(--rule);
+  padding-left: 0.6rem;
+  margin: 0.4rem 0;
+}
+.finding-reco {
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+</style>
+"""
+
+st.markdown(THEME_CSS, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
 # Autenticacion
 # ---------------------------------------------------------------------------
 
@@ -52,45 +269,123 @@ if "auth_user" not in st.session_state:
     st.session_state["auth_user"] = None
 
 if st.session_state["auth_user"] is None:
-    st.title("⚖️ Legal AI Tools")
-    tab_login, tab_registro = st.tabs(["Iniciar sesión", "Registrarse"])
+    _, col_card, _ = st.columns([1, 1.2, 1])
+    with col_card:
+        st.markdown(
+            """
+            <div class="expediente-card">
+              <div class="expediente-title">⚖️ Legal AI Tools</div>
+              <div class="expediente-subtitle">Acceso al expediente digital</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        tab_login, tab_registro, tab_recuperar = st.tabs(
+            ["Iniciar sesión", "Registrarse", "¿Olvidaste tu contraseña?"]
+        )
 
-    with tab_login:
-        with st.form("login_form"):
-            login_username = st.text_input("Usuario")
-            login_password = st.text_input("Contraseña", type="password")
-            submitted_login = st.form_submit_button("Iniciar sesión")
-        if submitted_login:
-            try:
-                auth.authenticate_user(login_username, login_password)
-                st.session_state["auth_user"] = login_username.strip()
-                st.rerun()
-            except auth.InvalidCredentialsError as exc:
-                st.error(str(exc))
-            except Exception as exc:
-                st.error(f"Error al iniciar sesión: {exc}")
-
-    with tab_registro:
-        with st.form("registro_form"):
-            new_username = st.text_input("Elige un usuario")
-            new_password = st.text_input("Elige una contraseña", type="password")
-            new_password2 = st.text_input("Confirma la contraseña", type="password")
-            submitted_reg = st.form_submit_button("Crear cuenta")
-        if submitted_reg:
-            if new_password != new_password2:
-                st.error("Las contraseñas no coinciden.")
-            elif len(new_password) < 8:
-                st.error("La contraseña debe tener al menos 8 caracteres.")
-            else:
+        with tab_login:
+            with st.form("login_form"):
+                login_username = st.text_input("Usuario")
+                login_password = st.text_input("Contraseña", type="password")
+                submitted_login = st.form_submit_button("Iniciar sesión", type="primary")
+            if submitted_login:
                 try:
-                    auth.create_user(new_username, new_password)
-                    st.success("Cuenta creada. Ya puedes iniciar sesión en la otra pestaña.")
-                except auth.UsernameTakenError as exc:
-                    st.error(str(exc))
-                except ValueError as exc:
+                    auth.authenticate_user(login_username, login_password)
+                    st.session_state["auth_user"] = login_username.strip()
+                    st.rerun()
+                except auth.InvalidCredentialsError as exc:
                     st.error(str(exc))
                 except Exception as exc:
-                    st.error(f"Error al crear la cuenta: {exc}")
+                    st.error(f"Error al iniciar sesión: {exc}")
+
+        with tab_registro:
+            with st.form("registro_form"):
+                new_username = st.text_input("Elige un usuario")
+                new_password = st.text_input("Elige una contraseña", type="password")
+                new_password2 = st.text_input("Confirma la contraseña", type="password")
+                new_security_question = st.text_input(
+                    "Pregunta de seguridad (para recuperar tu contraseña)"
+                )
+                new_security_answer = st.text_input("Respuesta secreta")
+                submitted_reg = st.form_submit_button("Crear cuenta", type="primary")
+            if submitted_reg:
+                if new_password != new_password2:
+                    st.error("Las contraseñas no coinciden.")
+                elif len(new_password) < 8:
+                    st.error("La contraseña debe tener al menos 8 caracteres.")
+                elif not new_security_question.strip() or not new_security_answer.strip():
+                    st.error("La pregunta y la respuesta de seguridad son obligatorias.")
+                else:
+                    try:
+                        auth.create_user(
+                            new_username, new_password, new_security_question, new_security_answer
+                        )
+                        st.success("Cuenta creada. Ya puedes iniciar sesión en la otra pestaña.")
+                    except auth.UsernameTakenError as exc:
+                        st.error(str(exc))
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:
+                        st.error(f"Error al crear la cuenta: {exc}")
+
+        with tab_recuperar:
+            if "recuperar_username" not in st.session_state:
+                st.session_state["recuperar_username"] = None
+                st.session_state["recuperar_pregunta"] = None
+
+            if st.session_state["recuperar_username"] is None:
+                with st.form("recuperar_buscar_form"):
+                    buscar_username = st.text_input("Usuario")
+                    submitted_buscar = st.form_submit_button("Continuar", type="primary")
+                if submitted_buscar:
+                    try:
+                        pregunta = auth.get_security_question(buscar_username)
+                        st.session_state["recuperar_username"] = buscar_username.strip()
+                        st.session_state["recuperar_pregunta"] = pregunta
+                        st.rerun()
+                    except auth.UserNotFoundError as exc:
+                        st.error(str(exc))
+            else:
+                st.info(f"Pregunta de seguridad: **{st.session_state['recuperar_pregunta']}**")
+                with st.form("recuperar_reset_form"):
+                    respuesta = st.text_input("Tu respuesta")
+                    nueva_password = st.text_input("Nueva contraseña", type="password")
+                    nueva_password2 = st.text_input(
+                        "Confirma la nueva contraseña", type="password"
+                    )
+                    submitted_reset = st.form_submit_button(
+                        "Restablecer contraseña", type="primary"
+                    )
+                if submitted_reset:
+                    if nueva_password != nueva_password2:
+                        st.error("Las contraseñas no coinciden.")
+                    elif len(nueva_password) < 8:
+                        st.error("La contraseña debe tener al menos 8 caracteres.")
+                    else:
+                        try:
+                            auth.reset_password(
+                                st.session_state["recuperar_username"], respuesta, nueva_password
+                            )
+                            st.session_state["recuperar_username"] = None
+                            st.session_state["recuperar_pregunta"] = None
+                            st.success(
+                                "Contraseña restablecida. Ya puedes iniciar sesión en la otra pestaña."
+                            )
+                        except auth.InvalidSecurityAnswerError as exc:
+                            st.error(str(exc))
+                        except auth.UserNotFoundError as exc:
+                            st.error(str(exc))
+                        except ValueError as exc:
+                            st.error(str(exc))
+                        except Exception as exc:
+                            st.error(f"Error al restablecer la contraseña: {exc}")
+
+                if st.button("Cancelar"):
+                    st.session_state["recuperar_username"] = None
+                    st.session_state["recuperar_pregunta"] = None
+                    st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.stop()
 
@@ -237,36 +532,43 @@ def vista_riesgo_contractual():
             conteo[h["nivel"]] += 1
 
         col1, col2, col3 = st.columns(3)
-        col1.metric(f"{RISK_EMOJI['alto']} Alto riesgo", conteo["alto"])
-        col2.metric(f"{RISK_EMOJI['medio']} Riesgo medio", conteo["medio"])
-        col3.metric(f"{RISK_EMOJI['bajo']} Bajo riesgo", conteo["bajo"])
-
-        orden = {"alto": 0, "medio": 1, "bajo": 2}
-        color = {"alto": "#fde2e2", "medio": "#fff3cd", "bajo": "#d9f2e3"}
-
-        rows_html = ""
-        for h in sorted(hallazgos, key=lambda x: orden[x["nivel"]]):
-            recomendacion = (h["recomendacion"] or "Sin recomendación generada.").replace("\n", " ")
-            texto = (h["texto_exacto"] or "—").replace("\n", " ")
-            rows_html += (
-                f"<tr style='background-color:{color[h['nivel']]}'>"
-                f"<td style='padding:6px'>{RISK_EMOJI[h['nivel']]} {RISK_LABEL[h['nivel']]}</td>"
-                f"<td style='padding:6px'>{h['clausula']}</td>"
-                f"<td style='padding:6px'>{texto}</td>"
-                f"<td style='padding:6px'>{recomendacion}</td>"
-                f"</tr>"
+        for col, nivel, etiqueta in (
+            (col1, "alto", "Alto riesgo"),
+            (col2, "medio", "Riesgo medio"),
+            (col3, "bajo", "Bajo riesgo"),
+        ):
+            col.markdown(
+                f"""
+                <div class="risk-metric" style="--risk-color:{RISK_COLOR[nivel]}">
+                  <div class="risk-metric-label">{RISK_EMOJI[nivel]} {etiqueta}</div>
+                  <div class="risk-metric-value">{conteo[nivel]}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
 
-        table_html = (
-            "<table style='width:100%; border-collapse:collapse;'>"
-            "<tr>"
-            "<th style='text-align:left; padding:6px'>Nivel</th>"
-            "<th style='text-align:left; padding:6px'>Cláusula</th>"
-            "<th style='text-align:left; padding:6px'>Texto exacto</th>"
-            "<th style='text-align:left; padding:6px'>Recomendación</th>"
-            "</tr>" + rows_html + "</table>"
-        )
-        st.markdown(table_html, unsafe_allow_html=True)
+        st.markdown("<div style='height:1.1rem'></div>", unsafe_allow_html=True)
+
+        orden = {"alto": 0, "medio": 1, "bajo": 2}
+
+        for h in sorted(hallazgos, key=lambda x: orden[x["nivel"]]):
+            nivel = h["nivel"]
+            recomendacion = html.escape(h["recomendacion"] or "Sin recomendación generada.")
+            texto = html.escape(h["texto_exacto"] or "—")
+            clausula = html.escape(h["clausula"])
+            st.markdown(
+                f"""
+                <div class="finding-card" style="--finding-color:{RISK_COLOR[nivel]}">
+                  <div class="finding-head">
+                    <span class="finding-tag">{clausula}</span>
+                    <span class="finding-level">{RISK_EMOJI[nivel]} {RISK_LABEL[nivel]}</span>
+                  </div>
+                  <div class="finding-quote">"{texto}"</div>
+                  <div class="finding-reco">{recomendacion}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     st.download_button(
         "⬇️ Descargar reporte (Markdown)",
