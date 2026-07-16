@@ -106,7 +106,55 @@ def ask_gemini(prompt: str, model: str, system_prompt: str = config.SYSTEM_PROMP
     return response.text
 
 
-def ask_llm(prompt: str, provider_config: dict, system_prompt: str = config.SYSTEM_PROMPT) -> str:
+def ask_deepseek(prompt: str, model: str, system_prompt: str = config.SYSTEM_PROMPT) -> str:
+    """DeepSeek expone una API compatible con OpenAI; se reutiliza el mismo
+    cliente cambiando solo la base_url."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=config.DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return response.choices[0].message.content
+
+
+def ask_github(prompt: str, model: str, system_prompt: str = config.SYSTEM_PROMPT) -> str:
+    """GitHub Models tambien expone una API compatible con OpenAI; la clave
+    es un token de GitHub con acceso a "models"."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=config.GITHUB_API_KEY, base_url="https://models.inference.ai.azure.com")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return response.choices[0].message.content
+
+
+def ask_groq(prompt: str, model: str, system_prompt: str = config.SYSTEM_PROMPT) -> str:
+    """Groq expone una API compatible con OpenAI; se reutiliza el mismo
+    cliente cambiando solo la base_url."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=config.GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    return response.choices[0].message.content
+
+
+def _dispatch_llm(prompt: str, provider_config: dict, system_prompt: str) -> str:
     provider = provider_config["provider"]
     model = provider_config["model"]
     if provider == "claude":
@@ -115,7 +163,43 @@ def ask_llm(prompt: str, provider_config: dict, system_prompt: str = config.SYST
         return ask_openai(prompt, model, system_prompt)
     if provider == "gemini":
         return ask_gemini(prompt, model, system_prompt)
+    if provider == "deepseek":
+        return ask_deepseek(prompt, model, system_prompt)
+    if provider == "github":
+        return ask_github(prompt, model, system_prompt)
+    if provider == "groq":
+        return ask_groq(prompt, model, system_prompt)
     raise ValueError(f"Proveedor no soportado: {provider}")
+
+
+# Ultimo proveedor que efectivamente respondio una llamada de ask_llm (puede
+# ser el principal o el de fallback). La UI lo lee para mostrar cual proveedor
+# esta realmente sirviendo las respuestas, no solo cual esta configurado.
+last_provider_used: dict | None = None
+
+
+def ask_llm(prompt: str, provider_config: dict, system_prompt: str = config.SYSTEM_PROMPT) -> str:
+    """Llama al proveedor indicado. Si config.LLM_FALLBACK_PROVIDER esta
+    configurado y es distinto al proveedor solicitado, ante cualquier error
+    (cuota agotada, red, etc.) reintenta automaticamente con el proveedor de
+    respaldo antes de propagar el error — para no interrumpir una demo en
+    curso por quedarse sin cuota en el proveedor principal."""
+    global last_provider_used
+    try:
+        result = _dispatch_llm(prompt, provider_config, system_prompt)
+        last_provider_used = {"provider": provider_config["provider"], "model": provider_config["model"]}
+        return result
+    except Exception as exc:
+        fallback_name = config.LLM_FALLBACK_PROVIDER
+        if not fallback_name or fallback_name == provider_config["provider"]:
+            raise
+        try:
+            fallback_config = config.get_provider_config(fallback_name)
+        except Exception:
+            raise exc
+        result = _dispatch_llm(prompt, fallback_config, system_prompt)
+        last_provider_used = {"provider": fallback_config["provider"], "model": fallback_config["model"]}
+        return result
 
 
 def main():

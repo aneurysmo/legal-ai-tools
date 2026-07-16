@@ -36,6 +36,23 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
+# --- DeepSeek (API compatible con OpenAI) ---
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+# --- GitHub Models (API compatible con OpenAI, usa un token de GitHub) ---
+GITHUB_API_KEY = os.getenv("GITHUB_API_KEY")
+GITHUB_MODEL = os.getenv("GITHUB_MODEL", "gpt-4o")
+
+# --- Groq (API compatible con OpenAI, inferencia muy rapida) ---
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+# Proveedor de respaldo: si esta configurado y es distinto al proveedor
+# activo, ask_llm() reintenta automaticamente con el si el proveedor activo
+# falla (cuota agotada, error de red, etc.) para no interrumpir una demo.
+LLM_FALLBACK_PROVIDER = os.getenv("LLM_FALLBACK_PROVIDER", "").lower()
+
 SYSTEM_PROMPT = (
     "Eres un asistente de investigacion juridica. Responde unicamente con "
     "base en los fragmentos del documento que se te entregan como contexto. "
@@ -81,29 +98,57 @@ DOCUMENT_SUMMARY_PROMPT = (
 MIN_RELEVANCE_SCORE = 0.55
 
 
-def get_active_provider_config():
-    """Valida y devuelve la configuracion del proveedor de LLM activo."""
-    if LLM_PROVIDER == "claude":
+def get_provider_config(provider_name: str) -> dict:
+    """Valida y devuelve la configuracion de UN proveedor especifico (no
+    necesariamente el activo). La usan tanto get_active_provider_config()
+    como el mecanismo de fallback automatico de ask_llm()."""
+    if provider_name == "claude":
         if not ANTHROPIC_API_KEY:
-            raise RuntimeError(
-                "LLM_PROVIDER='claude' pero falta ANTHROPIC_API_KEY en el entorno."
-            )
+            raise RuntimeError("Falta ANTHROPIC_API_KEY en el entorno.")
         return {"provider": "claude", "model": ANTHROPIC_MODEL}
 
-    if LLM_PROVIDER == "openai":
+    if provider_name == "openai":
         if not OPENAI_API_KEY:
-            raise RuntimeError(
-                "LLM_PROVIDER='openai' pero falta OPENAI_API_KEY en el entorno."
-            )
+            raise RuntimeError("Falta OPENAI_API_KEY en el entorno.")
         return {"provider": "openai", "model": OPENAI_MODEL}
 
-    if LLM_PROVIDER == "gemini":
+    if provider_name == "gemini":
         if not GEMINI_API_KEY:
-            raise RuntimeError(
-                "LLM_PROVIDER='gemini' pero falta GEMINI_API_KEY en el entorno."
-            )
+            raise RuntimeError("Falta GEMINI_API_KEY en el entorno.")
         return {"provider": "gemini", "model": GEMINI_MODEL}
 
+    if provider_name == "deepseek":
+        if not DEEPSEEK_API_KEY:
+            raise RuntimeError("Falta DEEPSEEK_API_KEY en el entorno.")
+        return {"provider": "deepseek", "model": DEEPSEEK_MODEL}
+
+    if provider_name == "github":
+        if not GITHUB_API_KEY:
+            raise RuntimeError("Falta GITHUB_API_KEY en el entorno.")
+        return {"provider": "github", "model": GITHUB_MODEL}
+
+    if provider_name == "groq":
+        if not GROQ_API_KEY:
+            raise RuntimeError("Falta GROQ_API_KEY en el entorno.")
+        return {"provider": "groq", "model": GROQ_MODEL}
+
     raise ValueError(
-        f"LLM_PROVIDER desconocido: '{LLM_PROVIDER}'. Usa 'claude', 'openai' o 'gemini'."
+        f"Proveedor desconocido: '{provider_name}'. "
+        "Usa 'claude', 'openai', 'gemini', 'deepseek', 'github' o 'groq'."
     )
+
+
+def get_active_provider_config():
+    """Valida y devuelve la configuracion del proveedor de LLM activo
+    (LLM_PROVIDER)."""
+    try:
+        return get_provider_config(LLM_PROVIDER)
+    except RuntimeError:
+        raise RuntimeError(
+            f"LLM_PROVIDER='{LLM_PROVIDER}' pero falta su API key en el entorno."
+        )
+    except ValueError:
+        raise ValueError(
+            f"LLM_PROVIDER desconocido: '{LLM_PROVIDER}'. "
+            "Usa 'claude', 'openai', 'gemini', 'deepseek', 'github' o 'groq'."
+        )

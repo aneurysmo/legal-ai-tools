@@ -26,6 +26,7 @@ import auth
 import config
 import document_drafting
 import knowledge_base
+import legal_research
 from contract_risk_analyzer import (
     build_analysis_prompt,
     build_report,
@@ -579,11 +580,11 @@ herramienta = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 provider_config, provider_error = get_provider_config_safe()
-st.sidebar.subheader("Proveedor de LLM activo")
-if provider_error:
-    st.sidebar.error(f"No se pudo determinar el proveedor de LLM:\n\n{provider_error}")
-else:
-    st.sidebar.success(f"**{provider_config['provider']}** — `{provider_config['model']}`")
+# Contenedor reservado aca arriba, pero se rellena mas abajo (despues de que
+# corra la herramienta seleccionada) para poder mostrar el proveedor que
+# realmente respondio en esta corrida -- el principal, o el de failover si
+# el principal fallo y legal_research.ask_llm() reintento con el respaldo.
+provider_status_placeholder = st.sidebar.container()
 
 
 # ---------------------------------------------------------------------------
@@ -1171,3 +1172,20 @@ else:
     vista_redaccion()
 
 render_floating_chat()
+
+with provider_status_placeholder:
+    st.subheader("Proveedor de LLM activo")
+    if provider_error:
+        st.error(f"No se pudo determinar el proveedor de LLM:\n\n{provider_error}")
+    else:
+        if legal_research.last_provider_used:
+            st.session_state["llm_ultimo_proveedor"] = legal_research.last_provider_used
+        en_uso = st.session_state.get("llm_ultimo_proveedor") or provider_config
+        es_failover = en_uso["provider"] != provider_config["provider"]
+        etiqueta = " ⚠️ (failover)" if es_failover else ""
+        st.success(f"**{en_uso['provider']}**{etiqueta} — `{en_uso['model']}`")
+        if es_failover:
+            st.caption(
+                f"El proveedor principal (**{provider_config['provider']}**) fallo en la "
+                "ultima llamada y se uso el respaldo automaticamente."
+            )
