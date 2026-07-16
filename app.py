@@ -80,11 +80,24 @@ h1, h2, h3, [data-testid="stMetricValue"] {
 }
 h1 { font-weight: 600; }
 
-[data-testid="stAppViewContainer"] { background: var(--paper); }
+[data-testid="stAppViewContainer"] { background: var(--paper); color: var(--ink); }
+
+/* Los encabezados y botones secundarios de Streamlit traen su propio color
+   de texto pensado para fondo claro; en modo oscuro se lo forzamos al token
+   del tema para que no queden ilegibles sobre el fondo oscuro. */
+h1, h2, h3, h4, [data-testid="stHeading"] * {
+  color: var(--ink) !important;
+}
+button[kind="secondary"], button[kind="secondaryFormSubmit"] {
+  background: var(--paper-inset) !important;
+  color: var(--ink) !important;
+  border-color: var(--rule) !important;
+}
 
 [data-testid="stSidebar"] {
   background: var(--paper-deep);
   border-right: 1px solid var(--rule);
+  color: var(--ink);
 }
 [data-testid="stSidebar"] h1 {
   font-size: 1.35rem;
@@ -107,14 +120,58 @@ h1 { font-weight: 600; }
 
 /* Inputs: relleno ligeramente mas oscuro que el entorno (inset) */
 [data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea,
 [data-testid="stChatInput"] textarea {
   background: var(--paper-inset) !important;
   border: 1px solid var(--rule) !important;
   color: var(--ink) !important;
 }
-[data-testid="stTextInput"] input:focus {
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 1px var(--accent) !important;
+}
+
+/* Selects y date pickers: Streamlit los pinta con clases internas propias
+   que no siguen la cascada normal de nuestras variables, asi que hay que
+   forzarlas por selector explicito (igual criterio que los text inputs de
+   arriba: relleno inset, borde sutil, texto legible). Sus menus/calendarios
+   se montan en un portal fuera del arbol de la app, por eso van aparte. */
+[data-testid="stSelectbox"] input,
+[data-testid="stMultiSelect"] input,
+[data-testid="stDateInput"] input {
+  background: var(--paper-inset) !important;
+  border-color: var(--rule) !important;
+  color: var(--ink) !important;
+}
+[data-testid="stSelectbox"] button,
+[data-testid="stMultiSelect"] button,
+[data-testid="stDateInput"] button {
+  background: var(--paper-inset) !important;
+  border-color: var(--rule) !important;
+}
+[data-testid="stSelectbox"] svg,
+[data-testid="stMultiSelect"] svg,
+[data-testid="stDateInput"] svg {
+  fill: var(--ink-faint) !important;
+}
+[data-testid="stDateInput"] input::placeholder {
+  color: var(--ink-faint) !important;
+  opacity: 1;
+}
+[data-testid="stDateInput"] div:has(> svg[title="Clear value"]) {
+  background: var(--paper-inset) !important;
+}
+
+/* El listbox de opciones y el calendario se montan en un portal fuera del
+   arbol de la app (top-layer), por eso necesitan su propia regla. */
+[role="listbox"], [role="option"] {
+  background: var(--paper-deep) !important;
+  color: var(--ink) !important;
+  border-color: var(--rule) !important;
+}
+[role="option"][aria-selected="true"], [role="option"]:hover {
+  background: var(--paper-inset) !important;
 }
 
 /* Botones primarios: sello de lacre, no azul SaaS */
@@ -401,7 +458,32 @@ button[data-baseweb="tab"][aria-selected="true"] {
 </style>
 """
 
+# Variante oscura: mismos tokens (--ink, --paper, --accent, etc.), solo se
+# redefinen sus valores -- todo el resto del CSS ya los referencia via var(),
+# asi que no hace falta duplicar ninguna regla.
+DARK_MODE_CSS = """
+<style>
+:root {
+  --ink: #ece7dc;
+  --ink-soft: #c9c2b4;
+  --ink-faint: #948c7c;
+  --paper: #1b1815;
+  --paper-deep: #24201c;
+  --paper-inset: #2e2921;
+  --rule: rgba(236,231,220,0.14);
+  --rule-soft: rgba(236,231,220,0.08);
+  --accent: #d1694f;
+  --accent-soft: rgba(209,105,79,0.14);
+}
+</style>
+"""
+
+if "dark_mode" not in st.session_state:
+    st.session_state["dark_mode"] = False
+
 st.markdown(THEME_CSS, unsafe_allow_html=True)
+if st.session_state["dark_mode"]:
+    st.markdown(DARK_MODE_CSS, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -567,6 +649,12 @@ st.sidebar.markdown(f"Conectado como **{st.session_state['auth_user']}**")
 if st.sidebar.button("Cerrar sesión"):
     st.session_state["auth_user"] = None
     st.rerun()
+
+nuevo_dark_mode = st.sidebar.toggle("🌙 Modo oscuro", value=st.session_state["dark_mode"])
+if nuevo_dark_mode != st.session_state["dark_mode"]:
+    st.session_state["dark_mode"] = nuevo_dark_mode
+    st.rerun()
+
 st.sidebar.markdown("---")
 
 herramienta = st.sidebar.radio(

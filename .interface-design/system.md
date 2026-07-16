@@ -40,3 +40,9 @@
 ## Notas de uso
 - Todo contenido generado por el LLM que se inserta vía `unsafe_allow_html=True` debe pasar por `html.escape()` primero (ver `vista_riesgo_contractual` y el panel de biblioteca en `vista_investigacion`).
 - Antes de agregar una nueva pieza de UI: revisar si `.finding-card`/`.risk-metric`/`.grounding-badge` ya cubren el caso antes de crear una clase nueva.
+
+## Modo oscuro
+- Toggle "🌙 Modo oscuro" en el sidebar (solo en el área de trabajo, nunca en login), controla `st.session_state["dark_mode"]`. Al activarse, se inyecta `DARK_MODE_CSS` (bloque `:root` con los mismos nombres de token, valores invertidos) inmediatamente después de `THEME_CSS`.
+- Gotcha importante: los widgets nativos de Streamlit (`st.selectbox`, `st.date_input`, botones `kind="secondary"`) NO heredan nuestras variables `:root` automáticamente — Streamlit los pinta con su propio CSS interno (clases `st-emotion-cache-*`/React Aria) que hay que sobreescribir explícitamente por selector (`[data-testid="stSelectbox"] input`, `[data-testid="stDateInput"] input`, `button[kind="secondary"]`, etc.), fijando **tanto fondo como color de texto juntos** — fijar solo uno de los dos (p. ej. solo `color` sin `background`) puede dejar texto claro sobre fondo claro (o viceversa) en modo oscuro, aunque en claro se vea bien por coincidencia.
+- Los menús desplegables (`role="listbox"`/`role="option"`) y el calendario del date picker se montan en un portal fuera del árbol de la app — necesitan su propia regla, no basta con estilizar el input.
+- Antes de dar por buena una pieza de UI en modo oscuro: probarla con Playwright (no basta con mirar la vista por defecto) — los selects, date inputs y botones secundarios fallaron en la primera pasada precisamente porque solo se verificó la vista de Análisis de riesgo contractual, que no los usa.
