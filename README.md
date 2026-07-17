@@ -1,4 +1,4 @@
-# Legal AI Tools
+# Lex Workspace
 
 Suite de herramientas de IA legal con interfaz unificada en Streamlit:
 

@@ -45,7 +45,7 @@ from legal_research import (
     extract_text_from_pdf,
 )
 
-st.set_page_config(page_title="Legal AI Tools", page_icon="⚖️", layout="wide")
+st.set_page_config(page_title="Lex Workspace", page_icon="⚖️", layout="wide")
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +69,18 @@ THEME_CSS = """
   --paper-inset: #ece5d6;
   --rule: rgba(33,29,26,0.12);
   --rule-soft: rgba(33,29,26,0.07);
-  --accent: #8a3324;
-  --accent-soft: rgba(138,51,36,0.08);
+  --accent: #1d3a5f;
+  --accent-soft: rgba(29,58,95,0.08);
+  /* Texto sobre superficies de --accent (botones primarios, boton/encabezado
+     del chat flotante): blanco, por pedido del cliente. Un solo valor sirve
+     para las 4 combinaciones de tema porque --accent es siempre un azul
+     (navy o su variante clara) en las cuatro -- no hace falta redefinirlo
+     por tema. */
+  --on-accent: #ffffff;
+  /* Acento secundario: no existe en Clasico, asi que por defecto es igual
+     al acento primario (no-op). Solo el tema Corporativo lo redefine con un
+     dorado discreto -- ver CORPORATIVO_CLARO_CSS / CORPORATIVO_OSCURO_CSS. */
+  --accent-2: var(--accent);
 }
 
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
@@ -99,11 +109,52 @@ button[kind="secondary"], button[kind="secondaryFormSubmit"] {
   border-right: 1px solid var(--rule);
   color: var(--ink);
 }
-[data-testid="stSidebar"] h1 {
-  font-size: 1.35rem;
-  margin-bottom: 0.1rem;
-}
 [data-testid="stSidebar"] hr { border-color: var(--rule-soft); margin: 0.9rem 0; }
+
+/* Marca: una insignia solida + wordmark en serif, no un st.title generico.
+   El mismo componente se reusa (con .brand-lg) en la tarjeta de login para
+   que la marca tenga presencia consistente en toda la app. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.brand-sidebar {
+  padding-bottom: 1.05rem;
+  margin-bottom: 0.85rem;
+  border-bottom: 1px solid var(--rule);
+}
+.brand-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+.brand-name {
+  font-family: 'Source Serif 4', serif;
+  font-weight: 700;
+  font-size: 1.28rem;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  line-height: 1.15;
+}
+.brand-tag {
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-top: 0.15rem;
+  white-space: nowrap;
+}
+.brand-lg .brand-mark { width: 54px; height: 54px; font-size: 1.6rem; border-radius: 12px; }
+.brand-lg .brand-name { font-size: 1.6rem; }
 
 /* Radio nav en el sidebar: lista tipo carpeta, no burbujas genericas */
 [data-testid="stSidebar"] [role="radiogroup"] {
@@ -116,6 +167,30 @@ button[kind="secondary"], button[kind="secondaryFormSubmit"] {
 }
 [data-testid="stSidebar"] [role="radiogroup"] label:hover {
   background: var(--paper-inset);
+}
+/* El punto del radio seleccionado viene coloreado con el primaryColor fijo
+   de .streamlit/config.toml (no sigue nuestras variables de tema); se
+   fuerza aqui para que respete el tema activo (Clasico/Corporativo). Se
+   apunta solo a los divs "vacios" (el circulo no tiene contenido) para no
+   pintar tambien el contenedor del texto de la opcion, que es un hermano
+   a la misma profundidad. */
+[data-testid="stRadioOption"][data-selected="true"] div:empty,
+[data-testid="stRadioOption"][data-selected="true"] div:has(> div:empty) {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+}
+/* Indicador de seccion activa: en Clasico --accent-2 es igual a --accent
+   (no-op, mismo oxblood de siempre); en Corporativo se convierte en el
+   dorado discreto pedido por el cliente, como unico toque de acento fuera
+   de navy/blanco/gris. */
+[data-testid="stRadioOption"][data-selected="true"] {
+  border-left: 2px solid var(--accent-2);
+  padding-left: calc(0.6rem - 2px);
+}
+/* Misma correccion para el riel del toggle "Modo oscuro" cuando esta
+   activado (el circulo interior ya es neutro y no necesita cambiar). */
+[data-testid="stSidebar"] label:has(input[role="switch"]:checked) div:has(> div:empty) {
+  background: var(--accent) !important;
 }
 
 /* Inputs: relleno ligeramente mas oscuro que el entorno (inset) */
@@ -177,9 +252,19 @@ button[kind="secondary"], button[kind="secondaryFormSubmit"] {
 /* Botones primarios: sello de lacre, no azul SaaS */
 button[kind="primary"], button[kind="primaryFormSubmit"] {
   background: var(--accent) !important;
+  color: var(--on-accent) !important;
   border: none !important;
   font-weight: 500;
   transition: transform 100ms ease-out;
+}
+/* La etiqueta del boton se renderiza como stMarkdownContainer > p, y la
+   regla global de parrafos (mas abajo, "[data-testid=stMarkdownContainer] p")
+   la pinta con --ink con !important -- gana por especificidad de selector
+   aunque el boton ya fije su propio color. Se fuerza aqui explicitamente
+   para que el texto del boton primario siga --on-accent, no --ink. */
+button[kind="primary"] [data-testid="stMarkdownContainer"] p,
+button[kind="primaryFormSubmit"] [data-testid="stMarkdownContainer"] p {
+  color: var(--on-accent) !important;
 }
 button[kind="primary"]:active, button[kind="primaryFormSubmit"]:active { transform: scale(0.97); }
 
@@ -233,14 +318,7 @@ button[data-baseweb="tab"][aria-selected="true"] {
   border: 1px solid var(--rule);
   border-radius: 10px;
   padding: 2rem 2.25rem 1.5rem;
-  box-shadow: 0 1px 2px rgba(33,29,26,0.05), 0 4px 16px rgba(33,29,26,0.04);
-}
-.expediente-title {
-  font-family: 'Source Serif 4', serif;
-  font-weight: 600;
-  font-size: 1.6rem;
-  color: var(--ink);
-  margin-bottom: 0.15rem;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.05);
 }
 .expediente-subtitle {
   color: var(--ink-faint);
@@ -347,9 +425,12 @@ button[data-baseweb="tab"][aria-selected="true"] {
 }
 
 /* Chat flotante: disponible en cualquier vista, esquina inferior derecha.
-   Sombra marcada a proposito (unica excepcion a "elevacion sutil" del resto
-   del sistema): es contenido superpuesto sobre la pagina, no una tarjeta
-   mas del flujo, y necesita leerse claramente por encima de todo. */
+   Antes vivia como dos piezas sueltas (boton redondo + panel aparte); ahora
+   son estados mutuamente excluyentes de UNA sola superficie -- al abrir el
+   panel el boton redondo desaparece y su lugar lo toma el boton de cerrar
+   dentro del propio encabezado, para que se lea como un unico componente
+   anclado, no como una ventana añadida encima de la pagina. El boton de
+   expandir (⤢/⤡) permite crecer el panel para consultas largas. */
 .st-key-floating_chat_toggle {
   position: fixed;
   bottom: 24px;
@@ -362,37 +443,68 @@ button[data-baseweb="tab"][aria-selected="true"] {
   height: 56px;
   border-radius: 50%;
   background: var(--accent) !important;
-  color: #fff !important;
+  color: var(--on-accent) !important;
   font-size: 1.4rem;
-  box-shadow: 0 6px 20px rgba(33,29,26,0.25);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
   border: none !important;
 }
 
-.st-key-floating_chat_panel {
+.st-key-floating_chat_panel_compact,
+.st-key-floating_chat_panel_expanded {
   position: fixed;
-  bottom: 96px;
   right: 24px;
   z-index: 999990;
-  width: 380px;
   max-width: calc(100vw - 48px);
   background: var(--paper-deep);
   border: 1px solid var(--rule);
   border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(33,29,26,0.22), 0 0 0 1px rgba(33,29,26,0.04);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.22), 0 0 0 1px var(--rule);
   overflow: hidden;
 }
+.st-key-floating_chat_panel_compact {
+  bottom: 24px;
+  width: 380px;
+  height: 460px;
+}
+.st-key-floating_chat_panel_expanded {
+  bottom: 24px;
+  width: min(680px, 92vw);
+  height: min(720px, calc(100vh - 48px));
+}
 
-.floating-chat-header {
+.st-key-floating_chat_header_row {
   background: var(--accent);
-  color: #fff;
+  display: flex;
+  align-items: center;
+  padding: 0.45rem 0.5rem 0.45rem 1.1rem;
+}
+.st-key-floating_chat_header_row [data-testid="stHorizontalBlock"] {
+  align-items: center;
+  width: 100%;
+}
+.st-key-floating_chat_header_row [data-testid="stColumn"] {
+  padding: 0 !important;
+}
+.floating-chat-title {
+  color: var(--on-accent);
   font-family: 'Source Serif 4', serif;
   font-weight: 600;
   font-size: 1rem;
-  padding: 0.7rem 1rem;
+}
+.st-key-floating_chat_header_row button {
+  background: transparent !important;
+  border: none !important;
+  color: var(--on-accent) !important;
+  font-size: 0.95rem;
+  padding: 0.25rem 0.5rem !important;
+  box-shadow: none !important;
+  min-height: 0 !important;
+}
+.st-key-floating_chat_header_row button:hover {
+  background: rgba(255,255,255,0.16) !important;
 }
 
 .floating-chat-messages {
-  max-height: 340px;
   overflow-y: auto;
   padding: 0.8rem;
   display: flex;
@@ -400,6 +512,15 @@ button[data-baseweb="tab"][aria-selected="true"] {
   gap: 0.5rem;
   scrollbar-width: thin;
   scrollbar-color: var(--ink-faint) transparent;
+}
+.st-key-floating_chat_panel_compact .floating-chat-messages {
+  max-height: 260px;
+}
+.st-key-floating_chat_panel_expanded .floating-chat-messages {
+  max-height: 560px;
+}
+.floating-chat-messages:has(> .chat-bubble-empty:only-child) {
+  justify-content: center;
 }
 .floating-chat-messages::-webkit-scrollbar { width: 8px; }
 .floating-chat-messages::-webkit-scrollbar-thumb {
@@ -433,7 +554,8 @@ button[data-baseweb="tab"][aria-selected="true"] {
   padding: 1rem 0;
 }
 
-.st-key-floating_chat_panel [data-testid="stForm"] {
+.st-key-floating_chat_panel_compact [data-testid="stForm"],
+.st-key-floating_chat_panel_expanded [data-testid="stForm"] {
   border: none !important;
   border-top: 1px solid var(--rule) !important;
   padding: 0.6rem 0.8rem !important;
@@ -458,10 +580,12 @@ button[data-baseweb="tab"][aria-selected="true"] {
 </style>
 """
 
-# Variante oscura: mismos tokens (--ink, --paper, --accent, etc.), solo se
-# redefinen sus valores -- todo el resto del CSS ya los referencia via var(),
-# asi que no hace falta duplicar ninguna regla.
-DARK_MODE_CSS = """
+# Cada variante de tema solo redefine los valores de los tokens (--ink,
+# --paper, --accent, etc.) -- todo el resto del CSS de arriba ya los
+# referencia via var(), asi que no hace falta duplicar ninguna regla por
+# tema. Dos temas (Clasico / Corporativo) x dos variantes (claro/oscuro).
+
+CLASICO_DARK_CSS = """
 <style>
 :root {
   --ink: #ece7dc;
@@ -472,18 +596,71 @@ DARK_MODE_CSS = """
   --paper-inset: #2e2921;
   --rule: rgba(236,231,220,0.14);
   --rule-soft: rgba(236,231,220,0.08);
-  --accent: #d1694f;
-  --accent-soft: rgba(209,105,79,0.14);
+  --accent: #5487ce;
+  --accent-soft: rgba(84,135,206,0.16);
 }
 </style>
 """
 
+# Corporativo: azul marino / gris oscuro / blanco -- la lectura que un
+# despacho asocia con solidez institucional, en vez de la calidez de
+# "expediente legal". Mismo sistema tipografico y de componentes, solo
+# cambia la paleta.
+CORPORATIVO_CLARO_CSS = """
+<style>
+:root {
+  --ink: #16202e;
+  --ink-soft: #4b5a6d;
+  --ink-faint: #8996a6;
+  --paper: #ffffff;
+  --paper-deep: #f3f6fa;
+  --paper-inset: #e8edf4;
+  --rule: rgba(15,32,54,0.11);
+  --rule-soft: rgba(15,32,54,0.06);
+  --accent: #1d3a5f;
+  --accent-soft: rgba(29,58,95,0.08);
+  /* Dorado muy discreto (no metalico/brillante) como acento secundario --
+     pedido explicito del cliente junto con navy/blanco/gris. Se usa con
+     moderacion: indicador de seccion activa y separador de la marca, nunca
+     como color de superficie o de botones. */
+  --accent-2: #a5883f;
+}
+</style>
+"""
+
+CORPORATIVO_OSCURO_CSS = """
+<style>
+:root {
+  --ink: #e7ebf1;
+  --ink-soft: #b3bdcb;
+  --ink-faint: #7c889b;
+  --paper: #0c131d;
+  --paper-deep: #131b27;
+  --paper-inset: #1b2534;
+  --rule: rgba(231,235,241,0.13);
+  --rule-soft: rgba(231,235,241,0.07);
+  --accent: #5487ce;
+  --accent-soft: rgba(84,135,206,0.16);
+  /* Mismo dorado discreto que en Corporativo claro, aclarado un poco para
+     mantener contraste legible sobre el fondo navy oscuro. */
+  --accent-2: #c2a35e;
+}
+</style>
+"""
+
+if "theme" not in st.session_state:
+    st.session_state["theme"] = "clasico"
 if "dark_mode" not in st.session_state:
     st.session_state["dark_mode"] = False
 
 st.markdown(THEME_CSS, unsafe_allow_html=True)
-if st.session_state["dark_mode"]:
-    st.markdown(DARK_MODE_CSS, unsafe_allow_html=True)
+if st.session_state["theme"] == "corporativo":
+    st.markdown(
+        CORPORATIVO_OSCURO_CSS if st.session_state["dark_mode"] else CORPORATIVO_CLARO_CSS,
+        unsafe_allow_html=True,
+    )
+elif st.session_state["dark_mode"]:
+    st.markdown(CLASICO_DARK_CSS, unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -499,7 +676,13 @@ if st.session_state["auth_user"] is None:
         st.markdown(
             """
             <div class="expediente-card">
-              <div class="expediente-title">⚖️ Legal AI Tools</div>
+              <div class="brand brand-lg" style="margin-bottom:1rem;">
+                <div class="brand-mark">⚖</div>
+                <div>
+                  <div class="brand-name">Lex Workspace</div>
+                  <div class="brand-tag">Inteligencia jurídica aplicada</div>
+                </div>
+              </div>
               <div class="expediente-subtitle">Acceso al expediente digital</div>
             """,
             unsafe_allow_html=True,
@@ -644,10 +827,33 @@ def get_provider_config_safe():
 # Sidebar
 # ---------------------------------------------------------------------------
 
-st.sidebar.title("⚖️ Legal AI Tools")
+st.sidebar.markdown(
+    """
+    <div class="brand brand-sidebar">
+      <div class="brand-mark">⚖</div>
+      <div>
+        <div class="brand-name">Lex Workspace</div>
+        <div class="brand-tag">Inteligencia jurídica</div>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 st.sidebar.markdown(f"Conectado como **{st.session_state['auth_user']}**")
 if st.sidebar.button("Cerrar sesión"):
     st.session_state["auth_user"] = None
+    st.rerun()
+
+TEMA_LABELS = {"clasico": "Clásico", "corporativo": "Corporativo"}
+tema_opciones = list(TEMA_LABELS.keys())
+nuevo_tema = st.sidebar.selectbox(
+    "Tema",
+    options=tema_opciones,
+    index=tema_opciones.index(st.session_state["theme"]),
+    format_func=lambda k: TEMA_LABELS[k],
+)
+if nuevo_tema != st.session_state["theme"]:
+    st.session_state["theme"] = nuevo_tema
     st.rerun()
 
 nuevo_dark_mode = st.sidebar.toggle("🌙 Modo oscuro", value=st.session_state["dark_mode"])
@@ -1040,21 +1246,47 @@ def render_floating_chat():
         st.session_state["research_messages"] = knowledge_base.get_chat_history(username)
     if "chat_widget_open" not in st.session_state:
         st.session_state["chat_widget_open"] = False
+    if "chat_expanded" not in st.session_state:
+        st.session_state["chat_expanded"] = False
 
-    with st.container(key="floating_chat_toggle"):
-        icon = "✕" if st.session_state["chat_widget_open"] else "💬"
-        if st.button(icon, key="chat_toggle_btn"):
-            st.session_state["chat_widget_open"] = not st.session_state["chat_widget_open"]
-            st.rerun()
-
+    # Boton redondo y panel son estados mutuamente excluyentes de un mismo
+    # componente (no dos piezas flotantes superpuestas): al abrir el panel,
+    # el cierre se mueve al encabezado del propio panel.
     if not st.session_state["chat_widget_open"]:
+        with st.container(key="floating_chat_toggle"):
+            if st.button("💬", key="chat_toggle_btn"):
+                st.session_state["chat_widget_open"] = True
+                st.rerun()
         return
 
-    with st.container(key="floating_chat_panel"):
-        st.markdown(
-            '<div class="floating-chat-header">📚 Biblioteca jurídica</div>',
-            unsafe_allow_html=True,
-        )
+    panel_key = (
+        "floating_chat_panel_expanded"
+        if st.session_state["chat_expanded"]
+        else "floating_chat_panel_compact"
+    )
+    with st.container(key=panel_key):
+        with st.container(key="floating_chat_header_row"):
+            col_titulo, col_expandir, col_cerrar = st.columns([5, 1, 1])
+            with col_titulo:
+                st.markdown(
+                    '<div class="floating-chat-title">📚 Biblioteca jurídica</div>',
+                    unsafe_allow_html=True,
+                )
+            with col_expandir:
+                expandir_icono = "⤡" if st.session_state["chat_expanded"] else "⤢"
+                expandir_ayuda = (
+                    "Volver a tamaño compacto"
+                    if st.session_state["chat_expanded"]
+                    else "Expandir para consultas complejas"
+                )
+                if st.button(expandir_icono, key="chat_expand_btn", help=expandir_ayuda):
+                    st.session_state["chat_expanded"] = not st.session_state["chat_expanded"]
+                    st.rerun()
+            with col_cerrar:
+                if st.button("✕", key="chat_close_btn", help="Cerrar"):
+                    st.session_state["chat_widget_open"] = False
+                    st.session_state["chat_expanded"] = False
+                    st.rerun()
 
         messages = st.session_state["research_messages"]
         if not messages:
