@@ -11,3 +11,11 @@ google-generativeai
 anthropic
 prisma
 bcrypt
+pymupdf
+pytesseract
+Pillow
+spacy
+dateparser
+ics
+matplotlib
+python-pptx

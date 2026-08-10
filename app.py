@@ -15,14 +15,17 @@ Uso:
     streamlit run app.py
 """
 
+import calendar as calendar_module
 import html
 import io
 import tempfile
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
 
 import auth
+import case_timeline
 import config
 import document_drafting
 import knowledge_base
@@ -37,6 +40,19 @@ from contract_risk_analyzer import (
     RISK_EMOJI,
     RISK_LABEL,
 )
+from deadline_extractor import (
+    calcular_plazos,
+    cargar_festivos,
+    CATEGORIA_COLOR,
+    CATEGORIA_EMOJI,
+    CATEGORIAS,
+    extraer_fechas_y_plazos,
+    fecha_notificacion_principal,
+    generar_ics,
+    generar_reporte_markdown,
+    normalizar_fecha,
+)
+from deadline_extractor import extract_text as extract_text_plazos
 from legal_research import (
     ask_llm,
     build_prompt,
@@ -81,6 +97,18 @@ THEME_CSS = """
      al acento primario (no-op). Solo el tema Corporativo lo redefine con un
      dorado discreto -- ver CORPORATIVO_CLARO_CSS / CORPORATIVO_OSCURO_CSS. */
   --accent-2: var(--accent);
+  /* Un color por categoria procesal (calendario + tarjetas de "Plazos y
+     calendario procesal"), para diferenciarlas de un vistazo. Valores para
+     fondo claro (Clasico claro y Corporativo claro, que no los redefine);
+     CLASICO_DARK_CSS y CORPORATIVO_OSCURO_CSS los aclaran para legibilidad
+     sobre fondo oscuro. */
+  --cat-notificacion: #2f6f76;
+  --cat-contestar: #8a3324;
+  --cat-audiencia: #1d3a5f;
+  --cat-pruebas: #6b4fa0;
+  --cat-sentencia: #a6741c;
+  --cat-impugnar: #b23b6b;
+  --cat-otra: #5b5449;
 }
 
 html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
@@ -394,6 +422,79 @@ button[data-baseweb="tab"][aria-selected="true"] {
   font-size: 0.88rem;
 }
 
+/* Calendario mensual (vista "Plazos y calendario procesal"): cuadricula
+   propia con nuestros tokens, no un widget de terceros -- mismo criterio
+   que .finding-card (fondo neutro + acento de color solo en el borde). */
+.calendario {
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 0.75rem 0 1.25rem;
+}
+.calendario-semana {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+.calendario-encabezado {
+  background: var(--paper-deep);
+  border-bottom: 1px solid var(--rule);
+}
+.calendario-dia-nombre {
+  padding: 0.4rem 0.3rem;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.calendario-dia {
+  min-height: 84px;
+  padding: 0.35rem;
+  border-right: 1px solid var(--rule-soft);
+  border-bottom: 1px solid var(--rule-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.calendario-semana .calendario-dia:last-child { border-right: none; }
+.calendario-semana:last-child .calendario-dia { border-bottom: none; }
+.calendario-dia-num {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--ink-soft);
+}
+.calendario-dia-otro-mes { background: var(--paper-inset); }
+.calendario-dia-otro-mes .calendario-dia-num { color: var(--ink-faint); opacity: 0.6; }
+.calendario-dia-hoy .calendario-dia-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.calendario-evento {
+  font-size: 0.66rem;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  background: var(--paper-deep);
+  border-left: 2px solid var(--evento-color, var(--accent));
+  color: var(--evento-color, var(--accent));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.calendario-evento-mas {
+  font-size: 0.66rem;
+  color: var(--ink-faint);
+  padding: 0 0.35rem;
+}
+
 /* Chat de la biblioteca: burbujas silenciosas, sin colores de fantasia */
 [data-testid="stChatMessage"] {
   background: var(--paper-deep);
@@ -598,6 +699,16 @@ CLASICO_DARK_CSS = """
   --rule-soft: rgba(236,231,220,0.08);
   --accent: #5487ce;
   --accent-soft: rgba(84,135,206,0.16);
+  /* Version aclarada de los colores por categoria, para legibilidad como
+     texto sobre fondo oscuro (los valores base de THEME_CSS se pensaron
+     para fondo claro). */
+  --cat-notificacion: #6cb3ba;
+  --cat-contestar: #d1694f;
+  --cat-audiencia: #5487ce;
+  --cat-pruebas: #b49bdb;
+  --cat-sentencia: #d1a54f;
+  --cat-impugnar: #dd82a4;
+  --cat-otra: #b3bdcb;
 }
 </style>
 """
@@ -644,6 +755,16 @@ CORPORATIVO_OSCURO_CSS = """
   /* Mismo dorado discreto que en Corporativo claro, aclarado un poco para
      mantener contraste legible sobre el fondo navy oscuro. */
   --accent-2: #c2a35e;
+  /* Misma aclarada de --cat-* que CLASICO_DARK_CSS -- incluida aqui tambien
+     porque cada bloque de tema solo redefine sus propias variables, no hay
+     herencia entre CLASICO_DARK_CSS y CORPORATIVO_OSCURO_CSS. */
+  --cat-notificacion: #6cb3ba;
+  --cat-contestar: #d1694f;
+  --cat-audiencia: #5487ce;
+  --cat-pruebas: #b49bdb;
+  --cat-sentencia: #d1a54f;
+  --cat-impugnar: #dd82a4;
+  --cat-otra: #b3bdcb;
 }
 </style>
 """
@@ -869,6 +990,8 @@ herramienta = st.sidebar.radio(
         "Análisis de riesgo contractual",
         "Biblioteca jurídica compartida",
         "Redacción de documentos",
+        "Plazos y calendario procesal",
+        "Línea de tiempo del caso",
     ],
 )
 
@@ -1481,6 +1604,605 @@ def vista_redaccion():
 
 
 # ---------------------------------------------------------------------------
+# Vista 4: Plazos y calendario procesal (deadline_extractor.py)
+# ---------------------------------------------------------------------------
+
+def _renderizar_tarjeta_fecha(f) -> None:
+    hora_txt = f" a las {html.escape(f.hora)}" if f.hora else ""
+    fecha_txt = f.fecha.strftime("%d/%m/%Y") if f.fecha else "sin determinar"
+    st.markdown(
+        f"""
+        <div class="finding-card" style="--finding-color:{CATEGORIA_COLOR[f.categoria]}">
+          <div class="finding-head">
+            <span class="finding-tag">{CATEGORIA_EMOJI[f.categoria]} {html.escape(CATEGORIAS[f.categoria])}</span>
+            <span class="finding-level">{fecha_txt}{hora_txt}</span>
+          </div>
+          <div class="finding-quote">"{html.escape(f.oracion.strip())}"</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _renderizar_tarjeta_plazo(p) -> None:
+    if p.fecha_base and p.fecha_limite:
+        rango = (
+            f"{p.fecha_base.strftime('%d/%m/%Y')} → "
+            f"<strong>{p.fecha_limite.strftime('%d/%m/%Y')}</strong>"
+        )
+        recomendacion = (
+            f"Actuar a más tardar el {p.fecha_limite.strftime('%d/%m/%Y')}; "
+            "agenda revisión interna con al menos 3 días de margen."
+        )
+    else:
+        rango = "sin fecha de notificación en el documento"
+        recomendacion = "Confirma manualmente la fecha de notificación de este plazo."
+    st.markdown(
+        f"""
+        <div class="finding-card" style="--finding-color:{CATEGORIA_COLOR[p.categoria]}">
+          <div class="finding-head">
+            <span class="finding-tag">{CATEGORIA_EMOJI[p.categoria]} {html.escape(CATEGORIAS[p.categoria])}</span>
+            <span class="finding-level">{p.dias} días hábiles</span>
+          </div>
+          <div class="finding-quote">{rango}</div>
+          <div class="finding-reco">{recomendacion}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+MESES_ES = [
+    "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+]
+DIAS_SEMANA_ES = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do"]
+
+
+def _eventos_por_fecha(fechas: list, plazos: list, nombre_caso: str) -> dict[date, list[dict]]:
+    """Agrupa fechas y plazos ya resueltos por dia calendario, para pintarlos
+    como "pildoras" en la vista de calendario. La etiqueta incluye el nombre
+    del caso (mismo dato que ya cita generar_ics en sus nombres de evento),
+    para que la pildora se relacione con el documento del que viene esa
+    fecha, no solo con la categoria generica. El color es uno por categoria
+    (CATEGORIA_COLOR), igual que en las tarjetas de detalle de abajo."""
+    eventos: dict[date, list[dict]] = {}
+    for f in fechas:
+        if f.fecha is None:
+            continue
+        eventos.setdefault(f.fecha, []).append({
+            "emoji": CATEGORIA_EMOJI[f.categoria],
+            "etiqueta": f"{CATEGORIAS[f.categoria]} · {nombre_caso}",
+            "color": CATEGORIA_COLOR[f.categoria],
+        })
+    for p in plazos:
+        if p.fecha_limite is None:
+            continue
+        eventos.setdefault(p.fecha_limite, []).append({
+            "emoji": CATEGORIA_EMOJI[p.categoria],
+            "etiqueta": f"{CATEGORIAS[p.categoria]} · {nombre_caso}",
+            "color": CATEGORIA_COLOR[p.categoria],
+        })
+    return eventos
+
+
+def _renderizar_calendario(eventos_por_fecha: dict[date, list[dict]], anio: int, mes: int) -> None:
+    """Cuadricula mensual propia (modulo estandar 'calendar', sin libreria de
+    terceros) -- monthdatescalendar ya entrega las semanas completas con los
+    dias de meses adyacentes para rellenar la grilla, sin calcular alineacion
+    a mano."""
+    semanas = calendar_module.Calendar(firstweekday=0).monthdatescalendar(anio, mes)
+    hoy = date.today()
+    max_eventos_visibles = 3
+
+    encabezado = "".join(
+        f'<div class="calendario-dia-nombre">{d}</div>' for d in DIAS_SEMANA_ES
+    )
+
+    filas_html = []
+    for semana in semanas:
+        celdas = []
+        for dia in semana:
+            clases = ["calendario-dia"]
+            if dia.month != mes:
+                clases.append("calendario-dia-otro-mes")
+            if dia == hoy:
+                clases.append("calendario-dia-hoy")
+
+            eventos_dia = eventos_por_fecha.get(dia, [])
+            pildoras = "".join(
+                f'<div class="calendario-evento" style="--evento-color:{ev["color"]}" '
+                f'title="{html.escape(ev["etiqueta"])}">'
+                f'{ev["emoji"]} {html.escape(ev["etiqueta"])}</div>'
+                for ev in eventos_dia[:max_eventos_visibles]
+            )
+            restantes = len(eventos_dia) - max_eventos_visibles
+            if restantes > 0:
+                pildoras += f'<div class="calendario-evento-mas">+{restantes} más</div>'
+
+            celdas.append(
+                f'<div class="{" ".join(clases)}">'
+                f'<div class="calendario-dia-num">{dia.day}</div>'
+                f'{pildoras}'
+                f'</div>'
+            )
+        filas_html.append(f'<div class="calendario-semana">{"".join(celdas)}</div>')
+
+    st.markdown(
+        f"""
+        <div class="calendario">
+          <div class="calendario-semana calendario-encabezado">{encabezado}</div>
+          {"".join(filas_html)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _vista_plazos_documento():
+    st.write(
+        "Sube un documento judicial en formato **.pdf** o **.docx** para detectar "
+        "fechas de notificación, audiencias, sentencias y plazos procesales, y "
+        "generar un calendario **.ics** listo para importar a Google Calendar, "
+        "Outlook o Apple Calendar."
+    )
+
+    uploaded_file = st.file_uploader(
+        "Documento judicial a analizar", type=["pdf", "docx"], key="plazos_uploader"
+    )
+    analizar = st.button("Analizar documento", type="primary", disabled=uploaded_file is None)
+
+    if analizar and uploaded_file:
+        tmp_path = save_uploaded_file(uploaded_file)
+        try:
+            with st.spinner("Extrayendo texto del documento..."):
+                try:
+                    texto = extract_text_plazos(tmp_path)
+                except ValueError as exc:
+                    st.error(str(exc))
+                    return
+
+            if not texto.strip():
+                st.warning(
+                    "No se pudo extraer texto del documento. ¿Está escaneado sin OCR?"
+                )
+                return
+
+            with st.spinner("Detectando fechas y plazos (spaCy + regex)..."):
+                try:
+                    fechas, plazos = extraer_fechas_y_plazos(texto)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                    return
+
+            if not fechas and not plazos:
+                st.warning("No se encontraron fechas ni plazos en este documento.")
+                return
+
+            st.session_state["plazos_fechas"] = fechas
+            st.session_state["plazos_plazos"] = plazos
+            st.session_state["plazos_documento"] = uploaded_file.name
+            # Se invalida cualquier calendario/reporte previo: hay que
+            # reconfirmar los anios ambiguos antes de volver a generarlos.
+            st.session_state.pop("plazos_ics", None)
+            st.session_state.pop("plazos_reporte_md", None)
+            # No arrastrar el mes de un caso anterior a este documento nuevo.
+            st.session_state.pop("plazos_calendario_mes", None)
+            st.session_state.pop("plazos_calendario_synced_doc", None)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    fechas = st.session_state.get("plazos_fechas")
+    plazos = st.session_state.get("plazos_plazos")
+    if fechas is None:
+        return
+
+    st.subheader("Fechas detectadas")
+
+    # Fechas sin anio explicito en el texto original (ej. "15 de enero"): en
+    # la CLI esto se resuelve preguntando por terminal (input()); aqui se
+    # resuelve con un widget por fecha ambigua antes de poder confirmar.
+    anios_elegidos: dict[int, int] = {}
+    indices_ambiguos = [idx for idx, f in enumerate(fechas) if f.anio_ambiguo]
+    if indices_ambiguos:
+        st.warning(
+            f"{len(indices_ambiguos)} fecha(s) no incluyen el año en el texto original. "
+            "Confirma a qué año corresponde cada una antes de generar el calendario."
+        )
+        for idx in indices_ambiguos:
+            f = fechas[idx]
+            col1, col2 = st.columns([3, 1])
+            col1.markdown(
+                f'**{CATEGORIAS[f.categoria]}** — "{html.escape(f.texto_fecha_cruda)}"  \n'
+                f'<span style="color:var(--ink-faint); font-size:0.85rem;">{html.escape(f.oracion.strip())}</span>',
+                unsafe_allow_html=True,
+            )
+            anios_elegidos[idx] = col2.number_input(
+                "Año", min_value=1900, max_value=2100, value=date.today().year,
+                key=f"plazos_anio_{idx}", label_visibility="collapsed",
+            )
+        st.markdown("---")
+
+    confirmar = st.button("✅ Confirmar fechas y generar calendario", type="primary")
+
+    if confirmar:
+        for idx, f in enumerate(fechas):
+            anio_hint = anios_elegidos.get(idx) if f.anio_ambiguo else None
+            f.fecha = normalizar_fecha(f.texto_fecha_cruda, anio_hint=anio_hint)
+
+        festivos = cargar_festivos(Path("festivos.json"))
+        fecha_notif = fecha_notificacion_principal(fechas)
+        calcular_plazos(plazos, fecha_notif, festivos)
+
+        if fecha_notif is None and plazos:
+            st.info(
+                "No se encontró una fecha de notificación explícita en el documento: "
+                "los plazos relativos no pudieron calcularse (no tendrán límite en el calendario)."
+            )
+
+        nombre_caso = Path(st.session_state["plazos_documento"]).stem
+        calendario = generar_ics(fechas, plazos, nombre_caso)
+        reporte_md = generar_reporte_markdown(
+            st.session_state["plazos_documento"], fechas, plazos
+        )
+
+        st.session_state["plazos_ics"] = calendario.serialize()
+        st.session_state["plazos_reporte_md"] = reporte_md
+        knowledge_base.log_activity(
+            st.session_state["auth_user"], "plazos", st.session_state["plazos_documento"]
+        )
+
+    if not fechas and not plazos:
+        st.info("No hay fechas ni plazos para mostrar.")
+        return
+
+    for f in fechas:
+        _renderizar_tarjeta_fecha(f)
+    for p in plazos:
+        _renderizar_tarjeta_plazo(p)
+
+    ics_data = st.session_state.get("plazos_ics")
+    reporte_md = st.session_state.get("plazos_reporte_md")
+
+    if not ics_data and not reporte_md:
+        st.caption(
+            "Presiona \"Confirmar fechas y generar calendario\" para habilitar la "
+            "descarga del calendario .ics y del reporte, y para ver estas fechas "
+            "en la pestaña \"Calendario\"."
+        )
+        return
+
+    nombre_base = Path(st.session_state.get("plazos_documento", "documento")).stem
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "⬇️ Descargar calendario (.ics)",
+            data=ics_data,
+            file_name=f"plazos_{nombre_base}.ics",
+            mime="text/calendar",
+            type="primary",
+        )
+    with col2:
+        st.download_button(
+            "⬇️ Descargar reporte (Markdown)",
+            data=reporte_md,
+            file_name=f"reporte_plazos_{nombre_base}.md",
+            mime="text/markdown",
+        )
+
+    with st.expander("Ver reporte completo en Markdown"):
+        st.markdown(reporte_md)
+
+
+def _vista_plazos_calendario():
+    """Pestaña siempre accesible, independiente de en que paso del analisis
+    este el usuario -- el marco del calendario (encabezado + navegacion +
+    cuadricula) se muestra siempre, aunque este vacio, en vez de aparecer
+    recien al final del flujo de la otra pestaña."""
+    fechas = st.session_state.get("plazos_fechas") or []
+    plazos = st.session_state.get("plazos_plazos") or []
+    nombre_caso = Path(st.session_state.get("plazos_documento", "documento")).stem
+
+    eventos_por_fecha = _eventos_por_fecha(fechas, plazos, nombre_caso)
+
+    if not st.session_state.get("plazos_fechas"):
+        st.info(
+            "Aún no has analizado ningún documento. Ve a la pestaña "
+            "\"Analizar documento\" para detectar fechas y verlas aquí."
+        )
+    elif not eventos_por_fecha:
+        st.info(
+            "Confirma las fechas en la pestaña \"Analizar documento\" "
+            "(botón \"✅ Confirmar fechas y generar calendario\") para verlas aquí."
+        )
+
+    # st.tabs ejecuta el cuerpo de AMBAS pestanas en cada rerun (solo oculta
+    # con CSS la que no esta activa) -- por eso esta funcion ya corre antes
+    # de que existan fechas confirmadas, y una inicializacion "una sola vez"
+    # aqui fijaria el mes en el primer render (vacio) y nunca saltaria al
+    # mes real una vez confirmadas las fechas en la otra pestana. Se guarda
+    # a que documento corresponde el ultimo salto automatico, para saltar
+    # de nuevo justo cuando aparecen eventos de un documento nuevo, sin
+    # pisar la navegacion manual del usuario en reruns posteriores del
+    # mismo documento (ej. al hacer clic en ◀/▶).
+    documento_actual = st.session_state.get("plazos_documento")
+    if eventos_por_fecha and st.session_state.get("plazos_calendario_synced_doc") != documento_actual:
+        primera = min(eventos_por_fecha.keys())
+        st.session_state["plazos_calendario_mes"] = (primera.year, primera.month)
+        st.session_state["plazos_calendario_synced_doc"] = documento_actual
+
+    if "plazos_calendario_mes" not in st.session_state:
+        st.session_state["plazos_calendario_mes"] = (date.today().year, date.today().month)
+
+    anio_mes, mes_mes = st.session_state["plazos_calendario_mes"]
+
+    nav_prev, nav_label, nav_next = st.columns([1, 4, 1])
+    with nav_prev:
+        if st.button("◀", key="plazos_mes_prev"):
+            mes_mes -= 1
+            if mes_mes == 0:
+                mes_mes, anio_mes = 12, anio_mes - 1
+            st.session_state["plazos_calendario_mes"] = (anio_mes, mes_mes)
+            st.rerun()
+    with nav_label:
+        st.markdown(
+            f'<div style="text-align:center; font-family:\'Source Serif 4\',serif; '
+            f'font-weight:600; font-size:1.1rem; padding-top:0.3rem;">'
+            f'{MESES_ES[mes_mes]} {anio_mes}</div>',
+            unsafe_allow_html=True,
+        )
+    with nav_next:
+        if st.button("▶", key="plazos_mes_next"):
+            mes_mes += 1
+            if mes_mes == 13:
+                mes_mes, anio_mes = 1, anio_mes + 1
+            st.session_state["plazos_calendario_mes"] = (anio_mes, mes_mes)
+            st.rerun()
+
+    _renderizar_calendario(eventos_por_fecha, anio_mes, mes_mes)
+
+
+def vista_plazos():
+    st.header("📅 Plazos y calendario procesal")
+
+    tab_documento, tab_calendario = st.tabs(["📄 Analizar documento", "📅 Calendario"])
+    with tab_documento:
+        _vista_plazos_documento()
+    with tab_calendario:
+        _vista_plazos_calendario()
+
+
+# ---------------------------------------------------------------------------
+# Vista 5: Linea de tiempo del caso (case_timeline.py)
+# ---------------------------------------------------------------------------
+
+def _renderizar_tarjeta_evento_timeline(e: dict) -> None:
+    color = case_timeline.CATEGORIA_COLOR.get(e["categoria"], "#666666")
+    emoji = case_timeline.CATEGORIA_EMOJI.get(e["categoria"], "📌")
+    fecha_txt = e["fecha"] or "sin fecha determinada"
+    personas_txt = ", ".join(e["personas"]) if e["personas"] else "—"
+    st.markdown(
+        f"""
+        <div class="finding-card" style="--finding-color:{color}">
+          <div class="finding-head">
+            <span class="finding-tag">{emoji} {html.escape(e['categoria_label'])}</span>
+            <span class="finding-level">{fecha_txt}</span>
+          </div>
+          <div class="finding-quote">{html.escape(e['descripcion'])}</div>
+          <div class="finding-reco">👥 {html.escape(personas_txt)} · 📄 {html.escape(e['fuente'])}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _renderizar_tarjeta_inconsistencia_timeline(inc: dict) -> None:
+    sugerida = f" (fecha sugerida: {inc['fecha_sugerida']})" if inc.get("fecha_sugerida") else ""
+    st.markdown(
+        f"""
+        <div class="finding-card" style="--finding-color:var(--accent-2)">
+          <div class="finding-head">
+            <span class="finding-tag">🔍 {html.escape(inc['tipo'])}</span>
+          </div>
+          <div class="finding-quote">{html.escape(inc['descripcion'])}{html.escape(sugerida)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _nombre_archivo_seguro(texto: str) -> str:
+    limpio = "".join(c if c.isalnum() else "_" for c in texto).strip("_")
+    return limpio or "timeline_caso"
+
+
+def _vista_timeline_documentos():
+    st.write(
+        "Sube uno o varios documentos (**.pdf**, **.docx**, **.txt**) del mismo caso "
+        "para reconstruir su línea de tiempo: eventos con fecha, personas involucradas, "
+        "categoría, relaciones entre eventos e inconsistencias."
+    )
+
+    uploaded_files = st.file_uploader(
+        "Documentos del caso", type=["pdf", "docx", "txt"],
+        accept_multiple_files=True, key="timeline_uploader",
+    )
+    nombre_caso_input = st.text_input("Nombre del caso (opcional)", key="timeline_nombre_caso_input")
+    analizar = st.button("Analizar documentos", type="primary", disabled=not uploaded_files)
+
+    if analizar and uploaded_files:
+        if provider_error:
+            st.error(f"No se puede analizar: {provider_error}")
+            return
+
+        # save_uploaded_file() usa un nombre temporal aleatorio (bien para
+        # las otras vistas, que no muestran el nombre de archivo en el
+        # resultado) -- aqui el nombre original SI importa (es el campo
+        # "fuente" de cada evento), asi que se preserva creando el temporal
+        # dentro de un directorio propio en vez de con nombre aleatorio.
+        tmp_dirs = [Path(tempfile.mkdtemp()) for _ in uploaded_files]
+        tmp_paths = []
+        for tmp_dir, f in zip(tmp_dirs, uploaded_files):
+            tmp_path = tmp_dir / f.name
+            tmp_path.write_bytes(f.getvalue())
+            tmp_paths.append(tmp_path)
+        try:
+            progreso = st.progress(0.0, text="Procesando documentos...")
+            avance = {"n": 0}
+
+            def _actualizar_progreso(nombre, n_eventos):
+                avance["n"] += 1
+                progreso.progress(
+                    avance["n"] / len(tmp_paths),
+                    text=f"{nombre}: {n_eventos} eventos encontrados ({avance['n']}/{len(tmp_paths)})",
+                )
+
+            try:
+                eventos_ordenados, conteo_por_doc, fallos_extraccion = case_timeline.procesar_documentos(
+                    tmp_paths, provider_config, interactivo=False,
+                    on_documento_procesado=_actualizar_progreso,
+                )
+            except ValueError as exc:
+                st.warning(str(exc))
+                return
+            progreso.progress(1.0, text="Extracción completa.")
+            if fallos_extraccion:
+                for nombre, motivo in fallos_extraccion:
+                    st.warning(f"No se pudo procesar **{nombre}**: {motivo}")
+        finally:
+            for p in tmp_paths:
+                p.unlink(missing_ok=True)
+            for tmp_dir in tmp_dirs:
+                tmp_dir.rmdir()
+
+        with st.spinner("Analizando consistencia y generando narrativa..."):
+            analisis = case_timeline.analizar_consistencia(eventos_ordenados, provider_config)
+
+        nombre_caso = nombre_caso_input.strip() or (
+            Path(uploaded_files[0].name).stem if len(uploaded_files) == 1 else "Caso judicial"
+        )
+        datos = case_timeline.construir_datos_timeline(nombre_caso, eventos_ordenados, analisis)
+
+        with st.spinner("Generando gráfico, reporte, presentación y HTML..."):
+            png_bytes = case_timeline.generar_grafico_png(datos)
+            st.session_state["timeline_datos"] = datos
+            st.session_state["timeline_png"] = png_bytes
+            st.session_state["timeline_md"] = case_timeline.generar_reporte_markdown(datos)
+            st.session_state["timeline_pptx"] = case_timeline.generar_pptx(datos, png_bytes)
+            st.session_state["timeline_html"] = case_timeline.generar_html_mermaid(datos)
+            st.session_state["timeline_json"] = case_timeline.generar_json(datos)
+
+        st.session_state["timeline_conteo_por_doc"] = conteo_por_doc
+        # Anios ambiguos (ej. "20 de febrero" sin anio) se resuelven aqui sin
+        # preguntar por evento -- a diferencia de "Plazos y calendario
+        # procesal" (pocas fechas por documento), aqui puede haber muchos
+        # eventos en varios documentos, y un widget por fecha ambigua seria
+        # dificil de usar. Se asume el anio actual (interactivo=False, igual
+        # que --no-interactivo en la CLI) y se avisa cuales se asumieron.
+        st.session_state["timeline_anios_ambiguos"] = [
+            {"texto": e.fecha_cruda, "descripcion": e.descripcion,
+             "fecha_asignada": e.fecha.isoformat() if e.fecha else None}
+            for e in eventos_ordenados if e.anio_ambiguo
+        ]
+        knowledge_base.log_activity(
+            st.session_state["auth_user"], "timeline",
+            ", ".join(f.name for f in uploaded_files),
+        )
+
+    datos = st.session_state.get("timeline_datos")
+    if datos is None:
+        return
+
+    conteo_por_doc = st.session_state.get("timeline_conteo_por_doc", {})
+    st.caption(
+        f"Último análisis: {len(datos['eventos'])} eventos en {len(conteo_por_doc)} documento(s). "
+        "Ve a la pestaña \"Línea de tiempo\" para ver el resultado."
+    )
+    for nombre, n in conteo_por_doc.items():
+        st.caption(f"📄 {nombre}: {n} eventos encontrados")
+
+    ambiguos = st.session_state.get("timeline_anios_ambiguos", [])
+    if ambiguos:
+        detalle = "; ".join(f'"{a["texto"]}" → {a["fecha_asignada"]}' for a in ambiguos)
+        st.warning(
+            f"{len(ambiguos)} fecha(s) no incluían el año en el texto original; "
+            f"se asumió el año actual: {detalle}. Revisa manualmente si no es correcto."
+        )
+
+
+def _vista_timeline_visual():
+    """Pestaña siempre accesible (mismo criterio que la pestaña "Calendario"
+    de vista_plazos): estado vacio antes de analizar, se puebla despues."""
+    datos = st.session_state.get("timeline_datos")
+    if datos is None:
+        st.info(
+            "Aún no has analizado ningún documento. Ve a la pestaña "
+            "\"Documentos\" para generar la línea de tiempo."
+        )
+        return
+
+    st.subheader(datos["caso"])
+    if datos["periodo"]["inicio"]:
+        st.caption(f"Periodo: {datos['periodo']['inicio']} a {datos['periodo']['fin']}")
+
+    png_bytes = st.session_state.get("timeline_png")
+    if png_bytes:
+        st.image(png_bytes, use_container_width=True)
+
+    if datos["narrativa"]:
+        st.subheader("📖 Narrativa del caso")
+        st.markdown(datos["narrativa"])
+
+    if datos["inconsistencias"]:
+        st.subheader("🔍 Inconsistencias encontradas")
+        for inc in datos["inconsistencias"]:
+            _renderizar_tarjeta_inconsistencia_timeline(inc)
+
+    st.subheader("Eventos")
+    for e in datos["eventos"]:
+        _renderizar_tarjeta_evento_timeline(e)
+
+    st.subheader("Descargar")
+    nombre_base = _nombre_archivo_seguro(datos["caso"])
+    col1, col2 = st.columns(2)
+    with col1:
+        st.download_button(
+            "⬇️ Gráfico (.png)", data=st.session_state["timeline_png"],
+            file_name=f"{nombre_base}.png", mime="image/png", type="primary",
+        )
+        st.download_button(
+            "⬇️ Reporte (Markdown)", data=st.session_state["timeline_md"],
+            file_name=f"{nombre_base}.md", mime="text/markdown",
+        )
+        st.download_button(
+            "⬇️ Datos (.json)", data=st.session_state["timeline_json"],
+            file_name=f"{nombre_base}_events.json", mime="application/json",
+        )
+    with col2:
+        st.download_button(
+            "⬇️ Presentación (.pptx)", data=st.session_state["timeline_pptx"],
+            file_name=f"{nombre_base}.pptx",
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        st.download_button(
+            "⬇️ HTML interactivo", data=st.session_state["timeline_html"],
+            file_name=f"{nombre_base}.html", mime="text/html",
+        )
+
+    with st.expander("Ver reporte completo en Markdown"):
+        st.markdown(st.session_state["timeline_md"])
+
+
+def vista_timeline():
+    st.header("🕒 Línea de tiempo del caso")
+    tab_documentos, tab_visual = st.tabs(["📂 Documentos", "🕒 Línea de tiempo"])
+    with tab_documentos:
+        _vista_timeline_documentos()
+    with tab_visual:
+        _vista_timeline_visual()
+
+
+# ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
 
@@ -1488,8 +2210,12 @@ if herramienta == "Análisis de riesgo contractual":
     vista_riesgo_contractual()
 elif herramienta == "Biblioteca jurídica compartida":
     vista_investigacion()
-else:
+elif herramienta == "Redacción de documentos":
     vista_redaccion()
+elif herramienta == "Plazos y calendario procesal":
+    vista_plazos()
+else:
+    vista_timeline()
 
 render_floating_chat()
 

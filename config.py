@@ -24,6 +24,18 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 CHUNK_SIZE_WORDS = 500
 TOP_K_CHUNKS = 4
 
+# --- OCR de respaldo (documentos escaneados o de baja calidad) ---
+# Si pypdf extrae menos de OCR_MIN_CHARS caracteres de un PDF (tipico de un
+# escaneo sin capa de texto, o de calidad tan baja que pypdf solo rescata
+# basura), legal_research.py reintenta rasterizando cada pagina y pasandola
+# por Tesseract OCR antes de rendirse.
+OCR_MIN_CHARS = 40
+OCR_LANGUAGE = os.getenv("OCR_LANGUAGE", "spa")  # idioma de Tesseract (ej. "spa", "eng", "spa+eng")
+OCR_DPI = int(os.getenv("OCR_DPI", "300"))  # mas DPI = mejor lectura en escaneos de baja calidad, pero mas lento
+# En Windows, si Tesseract no quedo en el PATH, se puede fijar la ruta exacta
+# al ejecutable via esta variable de entorno (ej. C:\Program Files\Tesseract-OCR\tesseract.exe).
+TESSERACT_CMD = os.getenv("TESSERACT_CMD")
+
 # --- Claude (Anthropic API / Claude Code) ---
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")

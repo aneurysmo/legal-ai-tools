@@ -4,7 +4,9 @@ legal_research.py
 Herramienta de investigacion juridica sobre un PDF:
 
 1. Recibe la ruta de un PDF como argumento.
-2. Extrae el texto y lo divide en fragmentos ("chunks") de ~500 palabras.
+2. Extrae el texto (con OCR de respaldo para escaneos o documentos de baja
+   calidad sin capa de texto) y lo divide en fragmentos ("chunks") de ~500
+   palabras.
 3. Genera embeddings de cada fragmento con sentence-transformers
    (all-MiniLM-L6-v2).
 4. Permite hacer preguntas desde la terminal; recupera los fragmentos mas
@@ -13,6 +15,11 @@ Herramienta de investigacion juridica sobre un PDF:
 
 Uso:
     python legal_research.py ruta/al/documento.pdf
+
+Requisitos para OCR: ademas de los paquetes 'pymupdf' y 'pytesseract' (ver
+requirements.txt), el binario de Tesseract OCR debe estar instalado en el
+sistema (en Windows, si no queda en el PATH, fijar TESSERACT_CMD en .env con
+la ruta al ejecutable).
 """
 
 import argparse
@@ -24,11 +31,58 @@ from sentence_transformers import SentenceTransformer
 
 import config
 
+try:
+    import fitz  # PyMuPDF, para rasterizar paginas antes de pasarlas por OCR
+except ImportError:
+    fitz = None
+
+try:
+    import pytesseract
+    from PIL import Image
+
+    if config.TESSERACT_CMD:
+        pytesseract.pytesseract.tesseract_cmd = config.TESSERACT_CMD
+except ImportError:
+    pytesseract = None
+
+
+def _ocr_pdf(pdf_path: str) -> str:
+    """OCR de respaldo para PDFs escaneados o de calidad tan baja que pypdf
+    no logra extraer una capa de texto util: rasteriza cada pagina con
+    PyMuPDF (a config.OCR_DPI) y reconoce el texto con Tesseract."""
+    if fitz is None or pytesseract is None:
+        raise RuntimeError(
+            "Este documento parece escaneado (sin capa de texto), pero el "
+            "soporte de OCR no esta instalado. Instala 'pymupdf' y "
+            "'pytesseract' (ver requirements.txt) y el binario de Tesseract "
+            "OCR en el sistema."
+        )
+    doc = fitz.open(pdf_path)
+    try:
+        zoom = config.OCR_DPI / 72
+        matrix = fitz.Matrix(zoom, zoom)
+        pages_text = []
+        for page in doc:
+            pixmap = page.get_pixmap(matrix=matrix)
+            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            pages_text.append(pytesseract.image_to_string(image, lang=config.OCR_LANGUAGE))
+        return "\n".join(pages_text)
+    finally:
+        doc.close()
+
 
 def extract_text_from_pdf(pdf_path: str) -> str:
+    """Extrae el texto de un PDF. Si la capa de texto viene vacia o
+    demasiado corta (menos de config.OCR_MIN_CHARS caracteres) -- tipico de
+    un documento escaneado sin OCR, o de una copia de tan baja calidad que
+    pypdf solo rescata basura -- reintenta con OCR pagina por pagina antes
+    de rendirse."""
     reader = PdfReader(pdf_path)
     pages_text = [page.extract_text() or "" for page in reader.pages]
-    return "\n".join(pages_text)
+    text = "\n".join(pages_text)
+    if len(text.strip()) < config.OCR_MIN_CHARS:
+        text = _ocr_pdf(pdf_path)
+    return text
 
 
 def chunk_text(text: str, chunk_size_words: int = config.CHUNK_SIZE_WORDS) -> list[str]:
@@ -211,9 +265,17 @@ def main():
     print(f"Proveedor de LLM activo: {provider_config['provider']} ({provider_config['model']})")
 
     print(f"Leyendo PDF: {args.pdf_path}")
-    text = extract_text_from_pdf(args.pdf_path)
+    try:
+        text = extract_text_from_pdf(args.pdf_path)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
     if not text.strip():
-        print("No se pudo extraer texto del PDF (¿esta escaneado sin OCR?).", file=sys.stderr)
+        print(
+            "No se pudo extraer texto del PDF ni siquiera con OCR "
+            "(¿esta vacio, corrupto, o la calidad del escaneo es demasiado baja?).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     chunks = chunk_text(text)
