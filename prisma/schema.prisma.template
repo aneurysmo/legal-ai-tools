@@ -1,5 +1,13 @@
+// PLANTILLA — no editar directamente para cambiar de proveedor de base de
+// datos. El marcador de proveedor (dos guiones bajos + DB_PROVIDER + dos
+// guiones bajos) que aparece abajo en el bloque 'datasource' se reemplaza
+// automaticamente por scripts/prepare_prisma_schema.py segun la variable de
+// entorno DB_PROVIDER (definida en tu .env / .env.demo / .env.prod). El
+// archivo real que usan los comandos de Prisma es prisma/schema.prisma
+// (generado, ignorado por git) — ver README.md > "Base de datos (Prisma)".
+
 datasource db {
-  provider = "sqlite"
+  provider = "__DB_PROVIDER__"
   url      = env("DATABASE_URL")
 }
 

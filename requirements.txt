@@ -4,6 +4,15 @@ pandas
 pypdf
 python-docx
 langchain
+
+# --- PyTorch CPU-only (requerido por sentence-transformers) ---
+# La rueda por defecto de PyPI para 'torch' incluye soporte CUDA/GPU, que no
+# se usa en despliegues sin GPU (Cloud Run, Render, etc.) y agrega ~1-1.5 GB
+# a la imagen de Docker. Esta linea fuerza a pip a resolver 'torch' contra el
+# indice oficial de ruedas CPU-only de PyTorch antes de instalar
+# sentence-transformers, que de lo contrario arrastraria la variante GPU.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
 sentence-transformers
 python-dotenv
 openai

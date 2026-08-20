@@ -8,13 +8,22 @@ __pycache__/
 venv/
 .venv/
 
-# Environment variables
+# Environment variables (los .example SI se versionan, ver .env*.example)
 .env
+.env.demo
+.env.prod
+.env.*.local
 
 # Prisma / SQLite
 prisma/app.db
 prisma/app.db-journal
 prisma/migrations/
+
+# prisma/schema.prisma es GENERADO por scripts/prepare_prisma_schema.py a
+# partir de prisma/schema.prisma.template (que si se versiona). No commitear
+# el generado para evitar que quede fijado el provider de quien lo genero
+# por ultima vez.
+prisma/schema.prisma
 
 # Documentos generados por document_drafting.py
 documentos_generados/

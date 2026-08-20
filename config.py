@@ -38,7 +38,7 @@ TESSERACT_CMD = os.getenv("TESSERACT_CMD")
 
 # --- Claude (Anthropic API / Claude Code) ---
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-8")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5") #claude-opus-4-8
 
 # --- OpenAI ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
