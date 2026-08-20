@@ -1,0 +1,45 @@
+# No enviar al build context de Docker lo que no pertenece a la imagen.
+# Sin este archivo, 'docker build' empaqueta y transfiere TODO el proyecto
+# al daemon (incluido venv/, ~2GB) antes de siquiera empezar el build --
+# desperdicia tiempo, disco y ancho de banda, y en equipos con poco espacio
+# libre puede agravar problemas de disco lleno durante el build.
+
+# Entorno virtual local (se reinstala desde requirements.txt en la imagen)
+venv/
+.venv/
+
+# Control de versiones
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Base de datos local / generados de Prisma (la imagen genera su propio schema)
+prisma/app.db
+prisma/app.db-journal
+prisma/migrations/
+prisma/schema.prisma
+
+# Secretos -- NUNCA deben terminar dentro de la imagen
+.env
+.env.demo
+.env.prod
+.env.*.local
+
+# Documentos generados en desarrollo local
+documentos_generados/
+historial.json
+inputfiles/
+
+# Editor / SO
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile
+.dockerignore
