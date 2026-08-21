@@ -85,32 +85,45 @@ python document_drafting.py
 | `document_drafting.py` | Generación y exportación (.docx/.txt) de documentos redactados |
 | `prisma/schema.prisma.template` | Plantilla versionada del esquema de base de datos (provider dinámico) |
 | `scripts/prepare_prisma_schema.py` | Genera `prisma/schema.prisma` (gitignored) desde la plantilla según `DB_PROVIDER` |
-| `Dockerfile` | Imagen base para despliegue (demo y producción), instala Tesseract OCR + dependencias |
+| `Dockerfile` | Imagen para despliegue en Cloud Run (producción), instala Tesseract OCR + dependencias |
+| `packages.txt` | Dependencias de sistema (apt) para Streamlit Community Cloud (demo) — equivalente al `apt-get` del Dockerfile |
 | `.interface-design/system.md` | Sistema de diseño de la UI (paleta, tipografía, patrones, modo oscuro) |
 
 ## Ambientes (demo / producción)
 
-La app está pensada para correr como **dos ambientes separados desde la misma imagen Docker**: código y `Dockerfile` idénticos, solo cambian las variables de entorno.
+La app corre en **dos plataformas distintas según el ambiente** — mismo código, distinta forma de desplegarlo:
 
 | | Demo | Producción (PRD) |
 |---|---|---|
 | Propósito | Mostrar la app a prospectos, pruebas | Cliente que ya contrató, datos reales |
-| Hosting | Plan gratis/barato, scale-to-zero (ej. Cloud Run free tier) | Plan pagado, siempre encendido |
+| Plataforma | **Streamlit Community Cloud** (gratis) | **Google Cloud Run** (ya aprobado) |
+| Usa el `Dockerfile` | No — Streamlit Cloud tiene su propio build (`requirements.txt` + `packages.txt`, sin comandos personalizados) | Sí |
+| Hosting | Gratis, se duerme por inactividad (no por límite de 24h) | Plan pagado, siempre encendido |
 | Base de datos | Postgres gestionado, tier gratuito (ej. Neon free) | Postgres gestionado, plan pagado, **instancia separada de demo** |
 | Plantilla de env | [.env.demo.example](.env.demo.example) | [.env.prod.example](.env.prod.example) |
 
-Ambos ambientes usan `DB_PROVIDER=postgresql` — SQLite queda reservado solo para desarrollo local (ver sección de Base de datos arriba), porque el filesystem de un contenedor en la nube es efímero y no persiste entre reinicios/redeploys.
+Ambos ambientes usan `DB_PROVIDER=postgresql` — SQLite queda reservado solo para desarrollo local (ver sección de Base de datos arriba), porque el filesystem de un contenedor/app en la nube es efímero y no persiste entre reinicios/redeploys.
 
-Copia la plantilla correspondiente (`.env.demo.example` → `.env.demo`, `.env.prod.example` → `.env.prod`), completa las credenciales reales, y pásalas al servicio de despliegue como variables de entorno (o un secret manager) — **nunca subir esos archivos al repo ni hornearlos en la imagen**.
+Copia la plantilla correspondiente (`.env.demo.example` → `.env.demo`, `.env.prod.example` → `.env.prod`), completa las credenciales reales, y pásalas al servicio de despliegue como variables de entorno/secretos (o un secret manager en producción) — **nunca subir esos archivos al repo ni hornearlos en la imagen**.
 
-### Despliegue con Docker
+### Despliegue en Cloud Run (producción) — con Docker
 
 ```bash
 docker build -t legal-ai-tools .
-docker run -p 8501:8501 --env-file .env.demo legal-ai-tools
+docker run -p 8501:8501 --env-file .env.prod legal-ai-tools
 ```
 
-El [Dockerfile](Dockerfile) instala Tesseract OCR (`apt-get`, liviano ~30-50 MB, no requiere Windows), instala las dependencias de Python (incluyendo `torch` CPU-only, ver nota arriba), descarga el modelo de spaCy en español, genera el cliente de Prisma con `DB_PROVIDER=postgresql` por defecto, y sirve la app en el puerto de la variable `PORT` (o `8501` si no está definida).
+El [Dockerfile](Dockerfile) instala Tesseract OCR (`apt-get`, liviano ~30-50 MB, no requiere Windows), instala las dependencias de Python (incluyendo `torch` CPU-only y el modelo de spaCy, ver notas arriba), genera el cliente de Prisma con `DB_PROVIDER=postgresql` por defecto, y sirve la app en el puerto de la variable `PORT` (o `8501` si no está definida). Verificado: `docker build` completa sin errores (imagen final ~1.73 GB).
+
+### Despliegue en Streamlit Community Cloud (demo)
+
+Streamlit Community Cloud **no usa el `Dockerfile`** — tiene su propio sistema de build limitado (`requirements.txt` + `packages.txt`, sin comandos de build arbitrarios). Por eso hay tres piezas específicas para esta plataforma:
+
+1. **[packages.txt](packages.txt)** — declara `tesseract-ocr`, `tesseract-ocr-spa`, `libgl1` (el equivalente al `apt-get install` del Dockerfile). Streamlit Cloud lo instala automáticamente antes de `pip install`.
+2. **Modelo de spaCy como wheel en `requirements.txt`** — en vez de `python -m spacy download` (que no se puede correr como paso de build aparte), el modelo `es_core_news_sm` está fijado como URL directa de wheel, instalable con pip como cualquier otro paquete. Si se actualiza la versión de `spacy` en `requirements.txt`, hay que actualizar esta URL al release compatible correspondiente (ver [explosion/spacy-models releases](https://github.com/explosion/spacy-models/releases)).
+3. **Generación de Prisma al arrancar `app.py`** — la función `_ensure_prisma_client()` al inicio de [app.py](app.py) corre `prepare_prisma_schema.py` + `prisma generate` + `prisma db push` automáticamente si el cliente de Prisma no existe todavía. En Cloud Run esto ya se resolvió en el build (la función detecta que el cliente ya existe y no hace nada); en Streamlit Cloud es la única forma de generarlo, ya que no hay paso de build personalizado.
+
+**Configuración de secretos:** en el panel de Streamlit Cloud ("Settings" → "Secrets"), pega el contenido de tu `.env.demo` en formato TOML (`LLM_PROVIDER = "gemini"`, etc.) — Streamlit Cloud no lee archivos `.env` directamente.
 
 ## Notas de despliegue en la nube
 

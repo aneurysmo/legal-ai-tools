@@ -18,9 +18,47 @@ Uso:
 import calendar as calendar_module
 import html
 import io
+import subprocess
+import sys
 import tempfile
 from datetime import date
 from pathlib import Path
+
+
+def _ensure_prisma_client() -> None:
+    """Genera el cliente de Prisma si todavia no existe.
+
+    En Cloud Run (Dockerfile) esto ya se hizo en build time y esta funcion
+    no hace nada (el cliente ya es importable). Existe para plataformas sin
+    paso de build personalizado -- Streamlit Community Cloud solo corre
+    'pip install -r requirements.txt' + 'packages.txt', sin comandos
+    arbitrarios -- donde 'prisma generate' / 'prisma db push' nunca se
+    ejecutarian de otra forma. Debe correr ANTES de 'import auth' /
+    'import knowledge_base' (mas abajo), porque ambos hacen
+    'from prisma import Prisma', que falla si el cliente no fue generado.
+
+    'prisma db push' aqui es idempotente para el schema actual (solo crea
+    tablas si no existen) y se acepta que corra en cada arranque frio del
+    contenedor -- es el precio de no tener un paso de build separado.
+    """
+    try:
+        from prisma import Prisma  # noqa: F401
+
+        return  # el cliente ya existe, nada que hacer
+    except Exception:
+        pass
+
+    project_root = Path(__file__).resolve().parent
+    subprocess.run(
+        [sys.executable, str(project_root / "scripts" / "prepare_prisma_schema.py")],
+        check=True,
+        cwd=project_root,
+    )
+    subprocess.run(["prisma", "generate", "--schema=prisma/schema.prisma"], check=True, cwd=project_root)
+    subprocess.run(["prisma", "db", "push", "--schema=prisma/schema.prisma"], check=True, cwd=project_root)
+
+
+_ensure_prisma_client()
 
 import streamlit as st
 
@@ -71,6 +109,7 @@ st.set_page_config(page_title="Lex Workspace", page_icon="⚖️", layout="wide"
 # ---------------------------------------------------------------------------
 
 RISK_COLOR = {"alto": "#8a3324", "medio": "#a6741c", "bajo": "#3f6b4c"}
+TEMA_LABELS = {"clasico": "Clásico", "corporativo": "Corporativo"}
 
 THEME_CSS = """
 <style>
@@ -678,6 +717,28 @@ button[data-baseweb="tab"][aria-selected="true"] {
   color: var(--ink);
   white-space: pre-wrap;
 }
+
+/* Avatares (sidebar/futuro y menu de perfil): el SVG de DiceBear trae sus
+   propios atributos width/height -- sin esta regla, ignora el tamano del
+   div contenedor y se desborda. Forzamos el svg a llenar su contenedor. */
+.avatar-thumb, .avatar-thumb-lg { line-height: 0; }
+.avatar-thumb svg, .avatar-thumb-lg svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+}
+.avatar-thumb { width: 36px; height: 36px; }
+.avatar-thumb-lg { width: 96px; height: 96px; margin: 0 auto 0.5rem auto; }
+
+/* Barra de perfil, esquina superior derecha del area de trabajo (alineada
+   visualmente con el "Deploy" nativo de Streamlit, que vive arriba de todo
+   y no es controlable desde el codigo de la app). */
+.st-key-profile_bar_row { margin-bottom: 0.5rem; }
+.st-key-profile_bar_row [data-testid="stPopover"] button {
+  border-radius: 999px !important;
+  padding: 0.3rem 0.9rem !important;
+}
 </style>
 """
 
@@ -830,6 +891,10 @@ if st.session_state["auth_user"] is None:
         with tab_registro:
             with st.form("registro_form"):
                 new_username = st.text_input("Elige un usuario")
+                new_email = st.text_input("Correo electrónico")
+                col_nombres, col_apellidos = st.columns(2)
+                new_first_name = col_nombres.text_input("Nombres (opcional)")
+                new_last_name = col_apellidos.text_input("Apellidos (opcional)")
                 new_password = st.text_input("Elige una contraseña", type="password")
                 new_password2 = st.text_input("Confirma la contraseña", type="password")
                 new_security_question = st.text_input(
@@ -847,10 +912,16 @@ if st.session_state["auth_user"] is None:
                 else:
                     try:
                         auth.create_user(
-                            new_username, new_password, new_security_question, new_security_answer
+                            new_username,
+                            new_password,
+                            new_security_question,
+                            new_security_answer,
+                            email=new_email,
+                            first_name=new_first_name,
+                            last_name=new_last_name,
                         )
                         st.success("Cuenta creada. Ya puedes iniciar sesión en la otra pestaña.")
-                    except auth.UsernameTakenError as exc:
+                    except (auth.UsernameTakenError, auth.EmailTakenError) as exc:
                         st.error(str(exc))
                     except ValueError as exc:
                         st.error(str(exc))
@@ -923,6 +994,89 @@ if st.session_state["auth_user"] is None:
 # Utilidades comunes
 # ---------------------------------------------------------------------------
 
+def render_profile_bar() -> None:
+    """Barra de perfil en la esquina superior derecha del area de trabajo:
+    avatar + menu (editar perfil/avatar, tema, modo oscuro, cerrar sesion).
+    Reemplaza lo que antes vivia repartido en el sidebar (ver TASKS.md,
+    21082111/21082112/21082113)."""
+    username = st.session_state["auth_user"]
+    perfil = auth.get_user_profile(username)
+
+    with st.container(key="profile_bar_row"):
+        _spacer, _bar_col = st.columns([6, 1.3])
+        with _bar_col:
+            _av_col, _pop_col = st.columns([1, 2])
+            with _av_col:
+                st.markdown(
+                    f'<div class="avatar-thumb">{auth.get_avatar_svg(perfil["avatar"])}</div>',
+                    unsafe_allow_html=True,
+                )
+            with _pop_col:
+                with st.popover(username, use_container_width=True):
+                    st.markdown(
+                        f'<div class="avatar-thumb-lg">{auth.get_avatar_svg(perfil["avatar"])}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                    st.markdown("**Mi perfil**")
+                    with st.form("profile_edit_form", border=False):
+                        edit_email = st.text_input("Correo electrónico", value=perfil["email"])
+                        edit_first = st.text_input("Nombres", value=perfil["firstName"])
+                        edit_last = st.text_input("Apellidos", value=perfil["lastName"])
+                        guardar_perfil = st.form_submit_button("Guardar datos")
+                    if guardar_perfil:
+                        try:
+                            auth.update_profile(username, edit_email, edit_first, edit_last)
+                            st.success("Perfil actualizado.")
+                            st.rerun()
+                        except (ValueError, auth.EmailTakenError) as exc:
+                            st.error(str(exc))
+
+                    st.markdown("---")
+                    st.markdown("**Avatar**")
+                    avatar_ids = auth.list_avatar_ids()
+                    avatar_labels = {
+                        aid: aid.split("-", 2)[-1] if "-" in aid else aid for aid in avatar_ids
+                    }
+                    elegido = st.selectbox(
+                        "Elige tu avatar",
+                        options=avatar_ids,
+                        index=avatar_ids.index(perfil["avatar"]) if perfil["avatar"] in avatar_ids else 0,
+                        format_func=lambda aid: avatar_labels.get(aid, aid),
+                        key="avatar_selector",
+                    )
+                    if st.button("Guardar avatar", key="guardar_avatar_btn"):
+                        auth.update_avatar(username, elegido)
+                        st.success("Avatar actualizado.")
+                        st.rerun()
+
+                    st.markdown("---")
+                    st.markdown("**Preferencias**")
+                    tema_opciones = list(TEMA_LABELS.keys())
+                    nuevo_tema = st.selectbox(
+                        "Tema",
+                        options=tema_opciones,
+                        index=tema_opciones.index(st.session_state["theme"]),
+                        format_func=lambda k: TEMA_LABELS[k],
+                        key="tema_selector",
+                    )
+                    if nuevo_tema != st.session_state["theme"]:
+                        st.session_state["theme"] = nuevo_tema
+                        st.rerun()
+
+                    nuevo_dark_mode = st.toggle(
+                        "🌙 Modo oscuro", value=st.session_state["dark_mode"], key="dark_mode_toggle"
+                    )
+                    if nuevo_dark_mode != st.session_state["dark_mode"]:
+                        st.session_state["dark_mode"] = nuevo_dark_mode
+                        st.rerun()
+
+                    st.markdown("---")
+                    if st.button("Cerrar sesión", key="cerrar_sesion_btn"):
+                        st.session_state["auth_user"] = None
+                        st.rerun()
+
+
 @st.cache_resource(show_spinner=False)
 def load_embedding_model(model_name: str):
     from sentence_transformers import SentenceTransformer
@@ -960,30 +1114,6 @@ st.sidebar.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.sidebar.markdown(f"Conectado como **{st.session_state['auth_user']}**")
-if st.sidebar.button("Cerrar sesión"):
-    st.session_state["auth_user"] = None
-    st.rerun()
-
-TEMA_LABELS = {"clasico": "Clásico", "corporativo": "Corporativo"}
-tema_opciones = list(TEMA_LABELS.keys())
-nuevo_tema = st.sidebar.selectbox(
-    "Tema",
-    options=tema_opciones,
-    index=tema_opciones.index(st.session_state["theme"]),
-    format_func=lambda k: TEMA_LABELS[k],
-)
-if nuevo_tema != st.session_state["theme"]:
-    st.session_state["theme"] = nuevo_tema
-    st.rerun()
-
-nuevo_dark_mode = st.sidebar.toggle("🌙 Modo oscuro", value=st.session_state["dark_mode"])
-if nuevo_dark_mode != st.session_state["dark_mode"]:
-    st.session_state["dark_mode"] = nuevo_dark_mode
-    st.rerun()
-
-st.sidebar.markdown("---")
-
 herramienta = st.sidebar.radio(
     "Elige una herramienta",
     [
@@ -2205,6 +2335,8 @@ def vista_timeline():
 # ---------------------------------------------------------------------------
 # Router
 # ---------------------------------------------------------------------------
+
+render_profile_bar()
 
 if herramienta == "Análisis de riesgo contractual":
     vista_riesgo_contractual()

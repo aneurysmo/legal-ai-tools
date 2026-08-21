@@ -20,6 +20,10 @@ generator client {
 model User {
   id                  Int      @id @default(autoincrement())
   username            String   @unique
+  email               String   @unique
+  firstName           String?
+  lastName            String?
+  avatar              String   @default("default-generic")
   passwordHash        String
   securityQuestion    String
   securityAnswerHash  String
