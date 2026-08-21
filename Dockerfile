@@ -31,9 +31,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Modelo de spaCy en espanol (deadline_extractor.py / procesamiento de texto).
-# Si el proyecto no lo usa en runtime, se puede quitar esta linea.
-RUN python -m spacy download es_core_news_sm || true
+# El modelo de spaCy en espanol (es_core_news_sm, usado por
+# deadline_extractor.py) ya viene incluido en requirements.txt como wheel
+# instalable via pip -- no hace falta 'python -m spacy download' aparte.
+# (Se fijo asi para que el mismo requirements.txt sirva tambien en
+# plataformas sin paso de build personalizado, como Streamlit Community
+# Cloud -- ver comentario en requirements.txt.)
 
 # --- Codigo de la aplicacion ---
 COPY . .

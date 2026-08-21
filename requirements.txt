@@ -23,7 +23,18 @@ bcrypt
 pymupdf
 pytesseract
 Pillow
-spacy
+
+# --- spaCy + modelo en espanol (fijado como wheel instalable via pip) ---
+# 'python -m spacy download es_core_news_sm' (usado en el Dockerfile) no es
+# una opcion en plataformas sin paso de build personalizado (Streamlit
+# Community Cloud solo corre pip install -r requirements.txt + packages.txt,
+# sin comandos arbitrarios). La URL apunta directo al wheel del modelo
+# publicado por explosion/spacy-models, instalable con pip como cualquier
+# otro paquete. Version fijada a 3.8.x para que coincida con el rango de
+# 'spacy' de abajo -- si se sube la version de spacy, esta URL debe
+# actualizarse al release compatible correspondiente.
+spacy>=3.8,<3.9
+https://github.com/explosion/spacy-models/releases/download/es_core_news_sm-3.8.0/es_core_news_sm-3.8.0-py3-none-any.whl
 dateparser
 ics
 matplotlib
